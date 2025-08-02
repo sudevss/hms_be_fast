@@ -1,0 +1,1 @@
+ALTER TABLE patients DROP COLUMN last_visited_date last_visited_doctor_id;
