@@ -1,6 +1,6 @@
 
 from sqlalchemy.orm import relationship
-from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean,DECIMAL
+from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean,DECIMAL,Numeric
 from database import Base
 import sqlalchemy as sa
 
@@ -41,6 +41,9 @@ class Doctors(Base):
     firstname = Column(String, nullable=False, index=True)
     lastname = Column(String, nullable=False, index=True)
     specialization = Column(String)
+    phone_number = Column(String)
+    email = Column(String, index=True)
+    consultation_fee = Column(Numeric(10, 2))  # Using Numeric for precise currency handling
     ABDM_NHPR_id = Column(String)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
