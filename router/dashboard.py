@@ -72,8 +72,7 @@ class SlotDetail(BaseModel):
 
 class DoctorSlotInfo(BaseModel):
     doctor_id: int
-    doctor_first_name: str  # Changed to first name
-    doctor_last_name: str   # Changed to last name
+    doctor_name: str  # Combined name instead of separate fields
     specialization: str
     available_slots: List[SlotDetail] = []
     free_slots: List[SlotDetail] = []
@@ -94,7 +93,7 @@ class DashboardResponse(BaseModel):
             "example": {
                 "facility_id": 1, "date": "2025-07-26", "day_of_week": "Saturday",
                 "doctors": [{
-                    "doctor_id": 1, "doctor_first_name": "John", "doctor_last_name": "Smith", 
+                    "doctor_id": 1, "doctor_name": "Dr. John Smith", 
                     "specialization": "Cardiology",
                     "available_slots": [{"slot_time": "09:00-09:30", "slot_id": 1, "total_appointments": 3, 
                                         "booked_appointments": 1, "available_appointments": 2, "is_available": True}],
@@ -116,8 +115,7 @@ class PatientCheckinInfo(BaseModel):
     patient_age: Optional[int] = None
     patient_gender: Optional[str] = None
     doctor_id: int
-    doctor_first_name: str  # Changed to first name
-    doctor_last_name: str   # Changed to last name
+    doctor_name: str  # Combined name instead of separate fields
     doctor_specialization: str
     appointment_date: str
     appointment_time: str
@@ -152,7 +150,7 @@ class CheckinResponse(BaseModel):
                     "appointment_id": 1, "patient_id": 1, "patient_name": "John Doe", 
                     "patient_contact": "+91-9876543210", "patient_email": "john.doe@email.com",
                     "patient_age": 35, "patient_gender": "M", "doctor_id": 1, 
-                    "doctor_first_name": "John", "doctor_last_name": "Smith", 
+                    "doctor_name": "Dr. John Smith", 
                     "doctor_specialization": "Cardiology",
                     "appointment_date": "2025-07-26", "appointment_time": "09:30", 
                     "scheduled_datetime": "2025-07-26 09:30", "reason": "Regular checkup",
@@ -414,6 +412,9 @@ async def get_doctor_details_for_dashboard(
         total_available_slots = total_free_slots = total_booked_slots = doctors_available = doctors_on_leave = 0
         
         for doctor in doctors:
+            # Combine doctor name with proper formatting
+            doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip()
+            
             doctor_schedule = None
             for schedule in doctor.schedules:
                 if schedule.DayOfWeek.lower() == day_of_week.lower():
@@ -423,8 +424,7 @@ async def get_doctor_details_for_dashboard(
             if not doctor_schedule:
                 doctors_info.append(DoctorSlotInfo(
                     doctor_id=doctor.id, 
-                    doctor_first_name=doctor.firstname,  # Updated to first name
-                    doctor_last_name=doctor.lastname,    # Updated to last name
+                    doctor_name=doctor_name,
                     specialization=doctor.specialization or "General",
                     available_slots=[], free_slots=[], total_available_slots=0, total_free_slots=0, is_on_leave=False
                 ))
@@ -440,8 +440,7 @@ async def get_doctor_details_for_dashboard(
                 doctors_on_leave += 1
                 doctors_info.append(DoctorSlotInfo(
                     doctor_id=doctor.id,
-                    doctor_first_name=doctor.firstname,  # Updated to first name
-                    doctor_last_name=doctor.lastname,    # Updated to last name
+                    doctor_name=doctor_name,
                     specialization=doctor.specialization or "General",
                     available_slots=[], free_slots=[], total_available_slots=0, total_free_slots=0, is_on_leave=True
                 ))
@@ -506,8 +505,7 @@ async def get_doctor_details_for_dashboard(
             
             doctors_info.append(DoctorSlotInfo(
                 doctor_id=doctor.id,
-                doctor_first_name=doctor.firstname,  # Updated to first name
-                doctor_last_name=doctor.lastname,    # Updated to last name
+                doctor_name=doctor_name,
                 specialization=doctor.specialization or "General",
                 available_slots=available_slots, 
                 free_slots=free_slots, 
@@ -532,7 +530,6 @@ async def get_doctor_details_for_dashboard(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving dashboard data: {str(e)}")
-
 @router.get("/getCheckinDetails", response_model=CheckinResponse)
 async def get_checkin_details_for_dashboard(
     FacilityID: int = Query(..., description="Facility ID"),
@@ -547,7 +544,7 @@ async def get_checkin_details_for_dashboard(
             raise HTTPException(status_code=404, detail="Facility not found")
         
         appointments = db.query(model.Appointment).filter(
-            and_(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == Date, model.Appointment.Cancelled == False)
+            and_(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == Date)
         ).options(joinedload(model.Appointment.patient), joinedload(model.Appointment.doctor)).order_by(model.Appointment.AppointmentTime).all()
         
         if not appointments:
@@ -563,6 +560,9 @@ async def get_checkin_details_for_dashboard(
             patient = appointment.patient
             patient_name = f"{patient.firstname} {patient.lastname}"
             doctor = appointment.doctor
+            # Combine doctor name with proper formatting
+            doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip()
+            
             appointment_datetime = datetime.combine(appointment.AppointmentDate, appointment.AppointmentTime)
             
             checkin_time_str = None
@@ -587,8 +587,7 @@ async def get_checkin_details_for_dashboard(
                 patient_age=patient.age,
                 patient_gender=patient.gender, 
                 doctor_id=appointment.DoctorID, 
-                doctor_first_name=doctor.firstname,  # Updated to first name
-                doctor_last_name=doctor.lastname,     # Updated to last name
+                doctor_name=doctor_name,
                 doctor_specialization=doctor.specialization or "General", 
                 appointment_date=appointment.AppointmentDate.strftime("%Y-%m-%d"),
                 appointment_time=appointment.AppointmentTime.strftime("%H:%M"), 
