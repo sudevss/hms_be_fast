@@ -204,15 +204,15 @@ class AppointmentDetailsResponse(BaseModel):
 @router.get("/", response_model=List[AppointmentResponse])
 def get_all_appointments(
     facility_id: int = Query(..., alias="FacilityID"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, le=100),
+    starts_from: int = Query(0, ge=0),
+    max_results: int = Query(10, le=100),
     db: Session = Depends(get_db)
 ):
     return (
         db.query(Appointment)
         .filter(Appointment.FacilityID == facility_id)
-        .offset(skip)
-        .limit(limit)
+        .offset(starts_from)
+        .limit(max_results)
         .all()
     )
 

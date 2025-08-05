@@ -23,6 +23,8 @@ class Patients(Base):
     order_id = Column(String, default=None)
     amount = Column(Integer, default=0)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
+    payment_method = Column(String(50), default="Cash")
+    is_paid = Column(Boolean, default=False)
 
     # ✅ New fields
     last_visited_doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=True)
@@ -137,6 +139,7 @@ class Appointment(Base):
     DoctorID = Column(Integer, ForeignKey("doctors.id"), nullable=False)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
     DCID = Column(Integer, ForeignKey("doctor_calendar.DCID"), nullable=False)
+    payment_method = Column(String(50), default="Cash")
 
     AppointmentDate = Column(Date, nullable=False)
     AppointmentTime = Column(Time, nullable=False)

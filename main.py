@@ -17,7 +17,7 @@ from database import engine, Base, SessionLocal, get_db
 from router import (
     auth, doctors, patients, usermaster, facility,
     slot_lookup, doctor_schedule, doctor_calendar,
-    appointment, medical_record, billing, medical_document,login,dashboard
+    appointment, medical_record, billing, medical_document,login,dashboard,new_booking
 )
 
 import model
@@ -73,6 +73,7 @@ app.include_router(billing.router)
 app.include_router(medical_document.router)
 app.include_router(login.router)
 app.include_router(dashboard.router)
+app.include_router(new_booking.router)
 
 
 # Home route (API root info)

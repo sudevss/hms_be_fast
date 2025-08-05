@@ -1,11 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, func, or_, extract
+from sqlalchemy import and_, func, or_, extract, text
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, date, time, timedelta
 from database import get_db
 import model
+from typing import Optional, List, Dict
+import time as time_module
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -62,49 +69,45 @@ class AppointmentDetailsResponse_Original(BaseModel):
     hourly: List[HourlyData]
     summary: AppointmentSummary
 
-class SlotDetail(BaseModel):
-    slot_time: str
-    is_booked: bool
-    appointment_id: Optional[int] = None
-    patient_name: Optional[str] = None
-    class Config:
-        from_attributes = True
+class HourlyBookingData(BaseModel):
+    hour: int
+    booking_count: int
+    time_slot: str  # e.g., "9 AM", "10 AM"
 
-class DoctorSlotInfo(BaseModel):
+class DoctorSummary(BaseModel):
+    total_appointments: int
+    total_checkin: int
+    available_slots: int
+    total_walkin_patients: int
+
+class DoctorInfo(BaseModel):
     doctor_id: int
-    doctor_name: str  # Combined name instead of separate fields
+    name: str
     specialization: str
-    available_slots: List[SlotDetail] = []
-    free_slots: List[SlotDetail] = []
-    total_available_slots: int = 0
-    total_free_slots: int = 0
-    is_on_leave: bool = False
-    class Config:
-        from_attributes = True
+    status: str  # "On Duty" / "Off Duty"
+    available_slots: int
+    total_slots: int
 
-class DashboardResponse(BaseModel):
+class TokenData(BaseModel):
+    appointment_id: int
+    token: str
+    patient_name: str
+    age: int
+    doctor_name: str
+    specialization: str
+    checkin_time: Optional[str]
+    payment_type: Optional[str]  # "Cash", "UPI", "Debit Card/Credit Card", "Net Banking"
+    is_paid: bool
+
+class DoctorDashboardResponse(BaseModel):
     facility_id: int
     date: str
     day_of_week: str
-    doctors: List[DoctorSlotInfo] = []
-    summary: dict = {}
-    class Config:
-        schema_extra = {
-            "example": {
-                "facility_id": 1, "date": "2025-07-26", "day_of_week": "Saturday",
-                "doctors": [{
-                    "doctor_id": 1, "doctor_name": "Dr. John Smith", 
-                    "specialization": "Cardiology",
-                    "available_slots": [{"slot_time": "09:00-09:30", "slot_id": 1, "total_appointments": 3, 
-                                        "booked_appointments": 1, "available_appointments": 2, "is_available": True}],
-                    "free_slots": [{"slot_time": "09:00-09:30", "slot_id": 1, "total_appointments": 3, 
-                                    "booked_appointments": 0, "available_appointments": 3, "is_available": True}],
-                    "total_available_slots": 8, "total_free_slots": 6, "is_on_leave": False
-                }],
-                "summary": {"total_doctors": 1, "doctors_available": 1, "doctors_on_leave": 0, 
-                            "total_available_slots": 8, "total_free_slots": 6, "total_booked_slots": 2}
-            }
-        }
+    doctor_filter: Optional[dict]  # Applied filter info
+    hourly_booking_chart: List[HourlyBookingData]
+    summary: DoctorSummary
+    doctors: List[DoctorInfo]
+    token_data: List[TokenData]
 
 class PatientCheckinInfo(BaseModel):
     appointment_id: int
@@ -162,23 +165,7 @@ class CheckinResponse(BaseModel):
             }
         }
 
-# New schemas for appointment booking
-class AppointmentBookingRequest(BaseModel):
-    facility_id: int
-    doctor_id: int
-    patient_id: int
-    appointment_date: date
-    appointment_time: time
-    reason: str
-    appointment_mode: str = "In-Person"
 
-class AppointmentBookingResponse(BaseModel):
-    message: str
-    appointment_id: int
-    patient_name: str
-    doctor_name: str
-    appointment_date: str
-    appointment_time: str
 
 # Helper functions
 def get_day_of_week(date_obj: date) -> str:
@@ -188,418 +175,649 @@ def get_day_of_week(date_obj: date) -> str:
 def format_time_slot(start_time: time, end_time: time) -> str:
     return f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
 
-def calculate_total_facility_slots(db: Session, facility_id: int, target_date: date) -> int:
-    day_of_week = get_day_of_week(target_date)
+def calculate_total_facility_slots_optimized(db: Session, facility_id: int, target_date: date) -> int:
+    """Optimized version with better error handling and logging"""
+    start_time = time_module.time()
     
-    calendar_slots = db.query(func.count(model.DoctorCalendar.SlotID)).filter(
-        and_(
-            model.DoctorCalendar.FacilityID == facility_id,
-            model.DoctorCalendar.Date == target_date,
-            or_(model.DoctorCalendar.SlotLeave != '1', model.DoctorCalendar.SlotLeave != 'Y', model.DoctorCalendar.SlotLeave.is_(None)),
-            or_(model.DoctorCalendar.FullDayLeave != '1', model.DoctorCalendar.FullDayLeave != 'Y', model.DoctorCalendar.FullDayLeave.is_(None))
-        )
-    ).scalar() or 0
-    
-    if calendar_slots > 0:
-        return calendar_slots
-    
-    doctors_with_schedule = db.query(model.Doctors).join(
-        model.DoctorSchedule, model.Doctors.id == model.DoctorSchedule.DoctorID
-    ).filter(
-        and_(model.Doctors.FacilityID == facility_id, func.lower(model.DoctorSchedule.DayOfWeek) == day_of_week.lower())
-    ).all()
-    
-    total_slots = 0
-    for doctor in doctors_with_schedule:
-        schedule = db.query(model.DoctorSchedule).filter(
-            and_(model.DoctorSchedule.DoctorID == doctor.id, func.lower(model.DoctorSchedule.DayOfWeek) == day_of_week.lower())
-        ).first()
+    try:
+        day_of_week = get_day_of_week(target_date)
         
-        if not schedule:
-            continue
-            
-        try:
-            schedule_start = datetime.strptime(schedule.StartTime, '%H:%M').time()
-            schedule_end = datetime.strptime(schedule.EndTime, '%H:%M').time()
-        except ValueError:
-            try:
-                schedule_start = datetime.strptime(schedule.StartTime, '%H:%M:%S').time()
-                schedule_end = datetime.strptime(schedule.EndTime, '%H:%M:%S').time()
-            except ValueError:
-                continue
+        # First try calendar-based slots with a single query
+        calendar_slots = db.query(func.count(model.DoctorCalendar.SlotID)).filter(
+            and_(
+                model.DoctorCalendar.FacilityID == facility_id,
+                model.DoctorCalendar.Date == target_date,
+                or_(
+                    model.DoctorCalendar.SlotLeave.is_(None),
+                    and_(model.DoctorCalendar.SlotLeave != '1', model.DoctorCalendar.SlotLeave != 'Y')
+                ),
+                or_(
+                    model.DoctorCalendar.FullDayLeave.is_(None),
+                    and_(model.DoctorCalendar.FullDayLeave != '1', model.DoctorCalendar.FullDayLeave != 'Y')
+                )
+            )
+        ).scalar() or 0
         
-        available_slots = db.query(model.SlotLookup).filter(
+        logger.info(f"Calendar slots query took: {time_module.time() - start_time:.2f}s")
+        
+        if calendar_slots > 0:
+            return calendar_slots
+        
+        # Fallback to schedule-based calculation with optimized queries
+        schedule_start_time = time_module.time()
+        
+        # Get all doctors with schedules in one query
+        doctors_with_schedule = db.query(
+            model.Doctors.id,
+            model.DoctorSchedule.StartTime,
+            model.DoctorSchedule.EndTime
+        ).join(
+            model.DoctorSchedule, model.Doctors.id == model.DoctorSchedule.DoctorID
+        ).filter(
+            and_(
+                model.Doctors.FacilityID == facility_id, 
+                func.lower(model.DoctorSchedule.DayOfWeek) == day_of_week.lower()
+            )
+        ).all()
+        
+        if not doctors_with_schedule:
+            logger.warning(f"No doctors with schedule found for facility {facility_id} on {day_of_week}")
+            return 0
+        
+        # Get all relevant slots in one query
+        slots = db.query(model.SlotLookup).filter(
             and_(
                 model.SlotLookup.FacilityID == facility_id,
-                model.SlotLookup.SlotStartTime >= schedule_start,
-                model.SlotLookup.SlotStartTime < schedule_end,
-                or_(model.SlotLookup.SlotSize == "15", model.SlotLookup.SlotSize == "30", model.SlotLookup.SlotSize == 15, model.SlotLookup.SlotSize == 30)
+                or_(
+                    model.SlotLookup.SlotSize == "15", 
+                    model.SlotLookup.SlotSize == "30", 
+                    model.SlotLookup.SlotSize == 15, 
+                    model.SlotLookup.SlotSize == 30
+                )
             )
-        ).count()
+        ).all()
         
-        total_slots += available_slots
-    
-    return total_slots
+        total_slots = 0
+        for doctor_id, start_time_str, end_time_str in doctors_with_schedule:
+            try:
+                # Try different time formats
+                for time_format in ['%H:%M', '%H:%M:%S']:
+                    try:
+                        schedule_start = datetime.strptime(start_time_str, time_format).time()
+                        schedule_end = datetime.strptime(end_time_str, time_format).time()
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    logger.warning(f"Could not parse time format for doctor {doctor_id}: {start_time_str}-{end_time_str}")
+                    continue
+                
+                # Count slots within schedule
+                available_slots = sum(1 for slot in slots 
+                                    if schedule_start <= slot.SlotStartTime < schedule_end)
+                total_slots += available_slots
+                
+            except Exception as e:
+                logger.error(f"Error processing doctor {doctor_id}: {str(e)}")
+                continue
+        
+        logger.info(f"Schedule calculation took: {time_module.time() - schedule_start_time:.2f}s")
+        logger.info(f"Total facility slots calculation took: {time_module.time() - start_time:.2f}s")
+        
+        return total_slots
+        
+    except Exception as e:
+        logger.error(f"Error in calculate_total_facility_slots_optimized: {str(e)}")
+        return 0
 
-# New helper function to check slot availability
 def is_slot_available(db: Session, facility_id: int, doctor_id: int, 
                      appointment_date: date, appointment_time: time) -> bool:
-    """
-    Check if a time slot is available for booking
-    Returns True if available, False if already booked
-    """
-    # Check for existing appointments in the same slot
-    existing = db.query(model.Appointment).filter(
-        model.Appointment.FacilityID == facility_id,
-        model.Appointment.DoctorID == doctor_id,
-        model.Appointment.AppointmentDate == appointment_date,
-        model.Appointment.AppointmentTime == appointment_time,
-        model.Appointment.Cancelled == False  # Only consider active appointments
-    ).first()
-
-    return existing is None
+    """Check if a time slot is available for booking"""
+    try:
+        existing = db.query(model.Appointment.AppointmentID).filter(
+            model.Appointment.FacilityID == facility_id,
+            model.Appointment.DoctorID == doctor_id,
+            model.Appointment.AppointmentDate == appointment_date,
+            model.Appointment.AppointmentTime == appointment_time,
+            model.Appointment.Cancelled == False
+        ).first()
+        
+        return existing is None
+    except Exception as e:
+        logger.error(f"Error checking slot availability: {str(e)}")
+        return False
 
 @router.get("/details", response_model=AppointmentDetailsResponse_Original)
 def get_appointment_details(FacilityID: int = Query(...), date: date = Query(...), db: Session = Depends(get_db)):
-    raw = (
-        db.query(extract("hour", model.Appointment.AppointmentTime).label("hour"), func.count(model.Appointment.AppointmentID).label("count"))
-        .filter(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == date)
-        .group_by("hour").order_by("hour").all()
-    )
+    start_time = time_module.time()
+    logger.info(f"Starting appointment details query for facility {FacilityID} on {date}")
     
-    hourly_dict = {int(r.hour): r.count for r in raw}
-    hourly = [HourlyData(hour=hour, count=hourly_dict.get(hour, 0)) for hour in range(9, 22)]
-
-    total_facility_slots = calculate_available_slots_like_doctor_details(db, FacilityID, date)
-
-    total_appointments = (
-        db.query(func.count(model.Appointment.AppointmentID))
-        .filter(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == date)
-        .scalar() or 0
-    )
-
-    total_checkin = (
-        db.query(func.count(model.Appointment.AppointmentID))
-        .filter(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == date, model.Appointment.CheckinTime.isnot(None))
-        .scalar() or 0
-    )
-
-    total_walkins = (
-        db.query(func.count(model.Appointment.AppointmentID))
-        .filter(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == date, model.Appointment.AppointmentMode.ilike("w%"))
-        .scalar() or 0
-    )
-
-    summary = AppointmentSummary(
-        totalAppointments=total_appointments,
-        totalCheckin=total_checkin,
-        availableSlots=total_facility_slots,
-        totalWalkInPatients=total_walkins
-    )
-
-    return AppointmentDetailsResponse_Original(hourly=hourly, summary=summary)
-
-def calculate_available_slots_like_doctor_details(db: Session, facility_id: int, target_date: date) -> int:
     try:
-        day_of_week = get_day_of_week(target_date)
-        doctors = db.query(model.Doctors).filter(model.Doctors.FacilityID == facility_id).options(joinedload(model.Doctors.schedules)).all()
+        # Optimized hourly data query
+        raw = db.query(
+            extract("hour", model.Appointment.AppointmentTime).label("hour"), 
+            func.count(model.Appointment.AppointmentID).label("count")
+        ).filter(
+            model.Appointment.FacilityID == FacilityID, 
+            model.Appointment.AppointmentDate == date,
+            model.Appointment.Cancelled == False  # Only active appointments
+        ).group_by("hour").order_by("hour").all()
         
-        if not doctors:
-            return 0
-        
-        total_available_slots = 0
-        
-        for doctor in doctors:
-            doctor_schedule = None
-            for schedule in doctor.schedules:
-                if schedule.DayOfWeek.lower() == day_of_week.lower():
-                    doctor_schedule = schedule
-                    break
-            
-            if not doctor_schedule:
-                continue
-            
-            calendar_entries = db.query(model.DoctorCalendar).filter(
-                and_(model.DoctorCalendar.DoctorID == doctor.id, model.DoctorCalendar.Date == target_date, model.DoctorCalendar.FacilityID == facility_id)
-            ).options(joinedload(model.DoctorCalendar.slot)).all()
-            
-            is_on_full_leave = any(entry.FullDayLeave == '1' or entry.FullDayLeave == 'Y' for entry in calendar_entries)
-            
-            if is_on_full_leave:
-                continue
-            
-            if not calendar_entries:
-                slots = db.query(model.SlotLookup).filter(
-                    and_(model.SlotLookup.FacilityID == facility_id, model.SlotLookup.SlotSize == "30")
-                ).all()
-                
-                try:
-                    schedule_start = datetime.strptime(doctor_schedule.StartTime, '%H:%M').time()
-                    schedule_end = datetime.strptime(doctor_schedule.EndTime, '%H:%M').time()
-                except ValueError:
-                    try:
-                        schedule_start = datetime.strptime(doctor_schedule.StartTime, '%H:%M:%S').time()
-                        schedule_end = datetime.strptime(doctor_schedule.EndTime, '%H:%M:%S').time()
-                    except ValueError:
-                        continue
-                
-                available_slots_for_doctor = [slot for slot in slots if schedule_start <= slot.SlotStartTime < schedule_end]
-                calendar_entries = available_slots_for_doctor
-            
-            doctor_available_slots = 0
-            for entry in calendar_entries:
-                if hasattr(entry, 'slot') and entry.slot:
-                    if entry.SlotLeave != '1' and entry.SlotLeave != 'Y':
-                        doctor_available_slots += 1
-                else:
-                    doctor_available_slots += 1
-            
-            total_available_slots += doctor_available_slots
-        
-        return total_available_slots
+        hourly_dict = {int(r.hour): r.count for r in raw}
+        hourly = [HourlyData(hour=hour, count=hourly_dict.get(hour, 0)) for hour in range(9, 22)]
+
+        # Now we can use the correct attribute name in SQL
+        total_appointments = db.query(func.count(model.Appointment.AppointmentID)).filter(
+            model.Appointment.FacilityID == FacilityID, 
+            model.Appointment.AppointmentDate == date,
+            model.Appointment.Cancelled == False
+        ).scalar() or 0
+
+        total_checkin = db.query(func.count(model.Appointment.AppointmentID)).filter(
+            model.Appointment.FacilityID == FacilityID, 
+            model.Appointment.AppointmentDate == date,
+            model.Appointment.Cancelled == False,
+            model.Appointment.CheckinTime.isnot(None)
+        ).scalar() or 0
+
+        total_walkins = db.query(func.count(model.Appointment.AppointmentID)).filter(
+            model.Appointment.FacilityID == FacilityID, 
+            model.Appointment.AppointmentDate == date,
+            model.Appointment.Cancelled == False,
+            func.lower(model.Appointment.AppointmentMode).like('w%')
+        ).scalar() or 0
+
+        # Use optimized slot calculation
+        total_facility_slots = calculate_total_facility_slots_optimized(db, FacilityID, date)
+
+        summary = AppointmentSummary(
+            totalAppointments=total_appointments,
+            totalCheckin=total_checkin,
+            availableSlots=total_facility_slots,
+            totalWalkInPatients=total_walkins
+        )
+
+        logger.info(f"Appointment details query completed in {time_module.time() - start_time:.2f}s")
+        return AppointmentDetailsResponse_Original(hourly=hourly, summary=summary)
         
     except Exception as e:
-        print(f"Error in calculate_available_slots_like_doctor_details: {str(e)}")
-        return calculate_total_facility_slots(db, facility_id, target_date)
+        logger.error(f"Error in get_appointment_details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving appointment details: {str(e)}")
 
-@router.get("/getDoctorDetails", response_model=DashboardResponse)
+@router.get("/getDoctorDetails", response_model=DoctorDashboardResponse)
 async def get_doctor_details_for_dashboard(
     FacilityID: int = Query(..., description="Facility ID"),
-    Date: date = Query(..., description="Date in YYYY-MM-DD format (e.g., 2025-07-26)"),
-    DoctorID: Optional[int] = Query(None, description="Optional Doctor ID to filter specific doctor"),
+    Date: date = Query(..., description="Date in YYYY-MM-DD format"),
+    DoctorID: Optional[int] = Query(None, description="Optional Doctor ID for filtering"),
+    DoctorName: Optional[str] = Query(None, description="Optional Doctor Name for filtering"),
     db: Session = Depends(get_db)
 ):
+    start_time = time_module.time()
+    logger.info(f"Starting doctor dashboard query for facility {FacilityID} on {Date}")
+    
     try:
         day_of_week = get_day_of_week(Date)
         
-        facility = db.query(model.Facility).filter(model.Facility.FacilityID == FacilityID).first()
+        # Verify facility exists
+        facility = db.query(model.Facility.FacilityID).filter(model.Facility.FacilityID == FacilityID).first()
         if not facility:
             raise HTTPException(status_code=404, detail="Facility not found")
-        
+
+        # Build optimized doctor query
         doctor_query = db.query(model.Doctors).filter(model.Doctors.FacilityID == FacilityID)
+        
+        doctor_filter_info = {}
         
         if DoctorID is not None:
             doctor_query = doctor_query.filter(model.Doctors.id == DoctorID)
-            doctor_exists = doctor_query.first()
-            if not doctor_exists:
-                raise HTTPException(status_code=404, detail=f"Doctor with ID {DoctorID} not found in facility {FacilityID}")
-        
-        doctors = doctor_query.options(joinedload(model.Doctors.schedules)).all()
+            doctor_filter_info["doctor_id"] = DoctorID
+            
+        if DoctorName is not None:
+            doctor_query = doctor_query.filter(
+                func.concat(model.Doctors.firstname, ' ', model.Doctors.lastname).ilike(f"%{DoctorName}%")
+            )
+            doctor_filter_info["doctor_name"] = DoctorName
+
+        doctors = doctor_query.all()
         
         if not doctors:
-            return DashboardResponse(
-                facility_id=FacilityID, date=Date.strftime("%Y-%m-%d"), day_of_week=day_of_week, doctors=[],
-                summary={"total_doctors": 0, "doctors_available": 0, "doctors_on_leave": 0, "total_available_slots": 0, "total_free_slots": 0, "total_booked_slots": 0}
-            )
+            return create_empty_response(FacilityID, Date, day_of_week, doctor_filter_info)
+
+        # Get all appointments with optimized query (limit joins)
+        doctor_ids = [doctor.id for doctor in doctors]
         
         appointments = db.query(model.Appointment).filter(
-            and_(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == Date, model.Appointment.Cancelled == False)
+            and_(
+                model.Appointment.FacilityID == FacilityID,
+                model.Appointment.AppointmentDate == Date,
+                model.Appointment.Cancelled == False,
+                model.Appointment.DoctorID.in_(doctor_ids) if doctor_ids else True
+            )
         ).options(joinedload(model.Appointment.patient)).all()
+
+        # Get hourly booking data
+        hourly_data = get_hourly_booking_data_optimized(appointments)
         
-        appointments_by_doctor = {}
-        for app in appointments:
-            if app.DoctorID not in appointments_by_doctor:
-                appointments_by_doctor[app.DoctorID] = []
-            appointments_by_doctor[app.DoctorID].append(app)
+        # Calculate summary with optimized logic - Updated to use actual calendar slots
+        summary = calculate_summary_optimized(appointments, len(doctors), db, doctor_ids, FacilityID, Date)
         
-        def find_appointment_in_slot(appointments: List[model.Appointment], slot_start: time, slot_end: time) -> Optional[model.Appointment]:
-            for app in appointments:
-                if slot_start <= app.AppointmentTime < slot_end:
-                    return app
-            return None
+        # Get doctor information with optimized queries - Updated to show actual free slots
+        doctors_info = get_doctors_info_optimized(doctors, Date, FacilityID, db, day_of_week)
         
-        doctors_info = []
-        total_available_slots = total_free_slots = total_booked_slots = doctors_available = doctors_on_leave = 0
-        
-        for doctor in doctors:
-            # Combine doctor name with proper formatting
-            doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip()
-            
-            doctor_schedule = None
-            for schedule in doctor.schedules:
-                if schedule.DayOfWeek.lower() == day_of_week.lower():
-                    doctor_schedule = schedule
-                    break
-            
-            if not doctor_schedule:
-                doctors_info.append(DoctorSlotInfo(
-                    doctor_id=doctor.id, 
-                    doctor_name=doctor_name,
-                    specialization=doctor.specialization or "General",
-                    available_slots=[], free_slots=[], total_available_slots=0, total_free_slots=0, is_on_leave=False
-                ))
-                continue
-            
-            calendar_entries = db.query(model.DoctorCalendar).filter(
-                and_(model.DoctorCalendar.DoctorID == doctor.id, model.DoctorCalendar.Date == Date, model.DoctorCalendar.FacilityID == FacilityID)
-            ).options(joinedload(model.DoctorCalendar.slot)).all()
-            
-            is_on_full_leave = any(entry.FullDayLeave == '1' or entry.FullDayLeave == 'Y' for entry in calendar_entries)
-            
-            if is_on_full_leave:
-                doctors_on_leave += 1
-                doctors_info.append(DoctorSlotInfo(
-                    doctor_id=doctor.id,
-                    doctor_name=doctor_name,
-                    specialization=doctor.specialization or "General",
-                    available_slots=[], free_slots=[], total_available_slots=0, total_free_slots=0, is_on_leave=True
-                ))
-                continue
-            
-            doctor_appointments = appointments_by_doctor.get(doctor.id, [])
-            
-            if not calendar_entries:
-                slots = db.query(model.SlotLookup).filter(
-                    and_(model.SlotLookup.FacilityID == FacilityID, model.SlotLookup.SlotSize == "30")
-                ).all()
-                
-                try:
-                    schedule_start = datetime.strptime(doctor_schedule.StartTime, '%H:%M').time()
-                    schedule_end = datetime.strptime(doctor_schedule.EndTime, '%H:%M').time()
-                except ValueError:
-                    try:
-                        schedule_start = datetime.strptime(doctor_schedule.StartTime, '%H:%M:%S').time()
-                        schedule_end = datetime.strptime(doctor_schedule.EndTime, '%H:%M:%S').time()
-                    except ValueError:
-                        continue
-                
-                available_slots_for_doctor = [slot for slot in slots if schedule_start <= slot.SlotStartTime < schedule_end]
-                calendar_entries = available_slots_for_doctor
-            
-            available_slots = []
-            free_slots = []
-            
-            for entry in calendar_entries:
-                if hasattr(entry, 'slot') and entry.slot:
-                    slot_start = entry.slot.SlotStartTime
-                    slot_end = entry.slot.SlotEndTime
-                    slot_time_str = format_time_slot(slot_start, slot_end)
-                    is_available = (entry.SlotLeave != '1' and entry.SlotLeave != 'Y')
-                else:
-                    slot_start = entry.SlotStartTime
-                    slot_end = entry.SlotEndTime
-                    slot_time_str = format_time_slot(slot_start, slot_end)
-                    is_available = True
-                
-                appointment_in_slot = find_appointment_in_slot(doctor_appointments, slot_start, slot_end)
-                is_booked = appointment_in_slot is not None
-                appointment_id = None
-                patient_name = None
-                
-                if is_booked and appointment_in_slot:
-                    appointment_id = appointment_in_slot.AppointmentID
-                    if appointment_in_slot.patient:
-                        patient_name = f"{appointment_in_slot.patient.firstname} {appointment_in_slot.patient.lastname}"
-                
-                slot_info = SlotDetail(
-                    slot_time=slot_time_str, is_booked=is_booked, appointment_id=appointment_id, patient_name=patient_name
-                )
-                
-                if is_available:
-                    available_slots.append(slot_info)
-                    if not is_booked:
-                        free_slots.append(slot_info)
-            
-            if available_slots:
-                doctors_available += 1
-            
-            doctors_info.append(DoctorSlotInfo(
-                doctor_id=doctor.id,
-                doctor_name=doctor_name,
-                specialization=doctor.specialization or "General",
-                available_slots=available_slots, 
-                free_slots=free_slots, 
-                total_available_slots=len(available_slots),
-                total_free_slots=len(free_slots), 
-                is_on_leave=False
-            ))
-            
-            total_available_slots += len(available_slots)
-            total_free_slots += len(free_slots)
-            total_booked_slots += len([slot for slot in available_slots if slot.is_booked])
-        
-        return DashboardResponse(
-            facility_id=FacilityID, date=Date.strftime("%Y-%m-%d"), day_of_week=day_of_week, doctors=doctors_info,
-            summary={
-                "total_doctors": len(doctors), "doctors_available": doctors_available, "doctors_on_leave": doctors_on_leave,
-                "total_available_slots": total_available_slots, "total_free_slots": total_free_slots, "total_booked_slots": total_booked_slots
-            }
+        # Get token data
+        token_data = get_token_data_optimized(appointments, doctors)
+
+        logger.info(f"Doctor dashboard query completed in {time_module.time() - start_time:.2f}s")
+
+        return DoctorDashboardResponse(
+            facility_id=FacilityID,
+            date=Date.strftime("%Y-%m-%d"),
+            day_of_week=day_of_week,
+            doctor_filter=doctor_filter_info if doctor_filter_info else None,
+            hourly_booking_chart=hourly_data,
+            summary=summary,
+            doctors=doctors_info,
+            token_data=token_data
         )
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error in get_doctor_details_for_dashboard: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving dashboard data: {str(e)}")
+
+def create_empty_response(facility_id: int, date: date, day_of_week: str, doctor_filter: dict):
+    return DoctorDashboardResponse(
+        facility_id=facility_id,
+        date=date.strftime("%Y-%m-%d"),
+        day_of_week=day_of_week,
+        doctor_filter=doctor_filter if doctor_filter else None,
+        hourly_booking_chart=[],
+        summary=DoctorSummary(
+            total_appointments=0,
+            total_checkin=0,
+            available_slots=0,
+            total_walkin_patients=0
+        ),
+        doctors=[],
+        token_data=[]
+    )
+
+def get_hourly_booking_data_optimized(appointments: List[model.Appointment]) -> List[HourlyBookingData]:
+    """Optimized hourly booking data generation"""
+    hourly_counts = {hour: 0 for hour in range(9, 22)}
+    
+    # Single pass through appointments
+    for appointment in appointments:
+        if appointment.AppointmentTime and 9 <= appointment.AppointmentTime.hour <= 21:
+            hourly_counts[appointment.AppointmentTime.hour] += 1
+    
+    return [
+        HourlyBookingData(
+            hour=hour,
+            booking_count=count,
+            time_slot=format_hour_display(hour)
+        )
+        for hour, count in hourly_counts.items()
+    ]
+
+def format_hour_display(hour: int) -> str:
+    """Convert 24-hour format to 12-hour format display"""
+    if hour == 0:
+        return "12 AM"
+    elif hour < 12:
+        return f"{hour} AM"
+    elif hour == 12:
+        return "12 PM"
+    else:
+        return f"{hour - 12} PM"
+
+def get_checkin_time_attr(appointment):
+    """Get checkin time attribute - now we know it's CheckinTime"""
+    return getattr(appointment, 'CheckinTime', None)
+
+def calculate_summary_optimized(appointments: List[model.Appointment], doctor_count: int, 
+                               db: Session, doctor_ids: List[int], facility_id: int, date: date) -> DoctorSummary:
+    """Optimized summary calculation with correct available slots from doctor calendar"""
+    
+    total_appointments = len(appointments)
+    total_checkin = sum(1 for app in appointments if app.CheckinTime is not None)
+    total_walkin_patients = sum(1 for app in appointments if 
+                               hasattr(app, 'AppointmentMode') and 
+                               app.AppointmentMode and 
+                               app.AppointmentMode.lower().startswith('w'))
+    
+    # Calculate actual available slots from doctor calendar
+    try:
+        # Get total slots from doctor calendar (not on leave)
+        total_calendar_slots = db.query(func.count(model.DoctorCalendar.SlotID)).filter(
+            and_(
+                model.DoctorCalendar.DoctorID.in_(doctor_ids),
+                model.DoctorCalendar.Date == date,
+                model.DoctorCalendar.FacilityID == facility_id,
+                or_(
+                    model.DoctorCalendar.SlotLeave.is_(None),
+                    and_(model.DoctorCalendar.SlotLeave != '1', model.DoctorCalendar.SlotLeave != 'Y')
+                ),
+                or_(
+                    model.DoctorCalendar.FullDayLeave.is_(None),
+                    and_(model.DoctorCalendar.FullDayLeave != '1', model.DoctorCalendar.FullDayLeave != 'Y')
+                )
+            )
+        ).scalar() or 0
+        
+        # Available slots = Total calendar slots - Booked appointments
+        available_slots = max(0, total_calendar_slots - total_appointments)
+        
+    except Exception as e:
+        logger.error(f"Error calculating available slots from calendar: {str(e)}")
+        # Fallback to rough estimate if calendar query fails
+        available_slots = max(0, doctor_count * 20 - total_appointments)
+    
+    return DoctorSummary(
+        total_appointments=total_appointments,
+        total_checkin=total_checkin,
+        available_slots=available_slots,
+        total_walkin_patients=total_walkin_patients
+    )
+
+def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facility_id: int, 
+                              db: Session, day_of_week: str) -> List[DoctorInfo]:
+    """Optimized doctor info retrieval with correct available (free) slots calculation"""
+    
+    # Get all doctor schedules in one query
+    doctor_ids = [doctor.id for doctor in doctors]
+    schedules = db.query(model.DoctorSchedule).filter(
+        and_(
+            model.DoctorSchedule.DoctorID.in_(doctor_ids),
+            func.lower(model.DoctorSchedule.DayOfWeek) == day_of_week.lower()
+        )
+    ).all()
+    
+    schedule_dict = {s.DoctorID: s for s in schedules}
+    
+    # Get all calendar entries in one query
+    calendar_entries = db.query(model.DoctorCalendar).filter(
+        and_(
+            model.DoctorCalendar.DoctorID.in_(doctor_ids),
+            model.DoctorCalendar.Date == date,
+            model.DoctorCalendar.FacilityID == facility_id
+        )
+    ).all()
+    
+    calendar_dict = {}
+    for entry in calendar_entries:
+        if entry.DoctorID not in calendar_dict:
+            calendar_dict[entry.DoctorID] = []
+        calendar_dict[entry.DoctorID].append(entry)
+    
+    # Get all booked appointments for these doctors on this date
+    booked_appointments = db.query(model.Appointment).filter(
+        and_(
+            model.Appointment.DoctorID.in_(doctor_ids),
+            model.Appointment.AppointmentDate == date,
+            model.Appointment.FacilityID == facility_id,
+            model.Appointment.Cancelled == False  # Only count non-cancelled appointments
+        )
+    ).all()
+    
+    # Create a dictionary to count booked slots per doctor
+    booked_slots_dict = {}
+    for appointment in booked_appointments:
+        doctor_id = appointment.DoctorID
+        if doctor_id not in booked_slots_dict:
+            booked_slots_dict[doctor_id] = 0
+        booked_slots_dict[doctor_id] += 1
+    
+    doctors_info = []
+    
+    for doctor in doctors:
+        doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip()
+        doctor_schedule = schedule_dict.get(doctor.id)
+        doctor_calendar = calendar_dict.get(doctor.id, [])
+        
+        # Check for full day leave
+        is_on_full_leave = any(entry.FullDayLeave in ('1', 'Y') for entry in doctor_calendar)
+        
+        if not doctor_schedule or is_on_full_leave:
+            status = "Off Duty"
+            available_slots = 0
+            total_slots = 0
+        else:
+            status = "On Duty"
+            
+            # Calculate total slots (slots not on leave)
+            total_available_slots = len([entry for entry in doctor_calendar 
+                                       if entry.SlotLeave not in ('1', 'Y')])
+            
+            # Calculate booked slots for this doctor
+            booked_slots = booked_slots_dict.get(doctor.id, 0)
+            
+            # Available slots = Total available slots - Booked slots
+            available_slots = max(0, total_available_slots - booked_slots)
+            total_slots = len(doctor_calendar)
+        
+        doctors_info.append(DoctorInfo(
+            doctor_id=doctor.id,
+            name=doctor_name,
+            specialization=doctor.specialization or "General",
+            status=status,
+            available_slots=available_slots,  # Now shows actual free slots
+            total_slots=total_slots
+        ))
+    
+    return doctors_info
+
+def get_token_data_optimized(appointments: List[model.Appointment], doctors: List[model.Doctors]) -> List[TokenData]:
+    """Optimized token data retrieval with correct payment info from patient table"""
+    
+    # Create doctor lookup dictionary
+    doctor_lookup = {doctor.id: doctor for doctor in doctors}
+    
+    token_data = []
+    
+    for appointment in appointments:
+        doctor = doctor_lookup.get(appointment.DoctorID)
+        doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip() if doctor else "Unknown"
+        specialization = doctor.specialization if doctor else "General"
+        
+        # Get patient info safely
+        patient_name = "Unknown"
+        age = 0
+        is_paid = False
+        
+        if appointment.patient:
+            patient_name = f"{appointment.patient.firstname} {appointment.patient.lastname}".strip()
+            age = getattr(appointment.patient, 'age', 0) or 0
+            
+            # Debug: Log available patient attributes
+            patient_attrs = [attr for attr in dir(appointment.patient) if not attr.startswith('_')]
+            logger.info(f"Patient attributes: {patient_attrs}")
+            
+            # Get is_paid from patient table - check common field names
+            is_paid_value = getattr(appointment.patient, 'is_paid', None) or \
+                           getattr(appointment.patient, 'payment_status', None) or \
+                           getattr(appointment.patient, 'paid_status', None) or \
+                           getattr(appointment.patient, 'PaymentStatus', None) or \
+                           getattr(appointment.patient, 'IsPaid', None)
+            
+            # Handle different formats of payment status
+            if isinstance(is_paid_value, bool):
+                is_paid = is_paid_value
+            elif isinstance(is_paid_value, str):
+                is_paid = is_paid_value.lower() in ['paid', 'yes', 'y', '1', 'true']
+            elif isinstance(is_paid_value, int):
+                is_paid = bool(is_paid_value)
+            else:
+                is_paid = False
+        
+        # Format check-in time
+        checkin_time = None
+        if appointment.CheckinTime:
+            checkin_time = appointment.CheckinTime.strftime("%I:%M %p")
+        
+        # Payment type with updated options - check multiple possible field names
+        payment_type = "Cash"  # Default
+        
+        # Debug: Log available appointment attributes
+        appointment_attrs = [attr for attr in dir(appointment) if not attr.startswith('_')]
+        logger.info(f"Appointment attributes: {appointment_attrs}")
+        
+        # Check appointment table for payment method
+        appointment_payment = None
+        for field_name in ['PaymentMethod', 'PaymentType', 'payment_method', 'payment_type', 
+                          'PaymentMode', 'payment_mode', 'Method', 'Type']:
+            value = getattr(appointment, field_name, None)
+            if value:
+                appointment_payment = value
+                logger.info(f"Found payment method in appointment.{field_name}: {value}")
+                break
+        
+        # Check patient table for payment method
+        patient_payment = None
+        if appointment.patient:
+            for field_name in ['payment_method', 'PaymentMethod', 'payment_type', 'PaymentType',
+                              'payment_mode', 'PaymentMode', 'Method', 'Type']:
+                value = getattr(appointment.patient, field_name, None)
+                if value:
+                    patient_payment = value
+                    logger.info(f"Found payment method in patient.{field_name}: {value}")
+                    break
+        
+        # Use appointment payment method first, then patient payment method
+        payment_method = appointment_payment or patient_payment
+        
+        if payment_method:
+            payment_method_lower = str(payment_method).lower().strip()
+            logger.info(f"Processing payment method: {payment_method} -> {payment_method_lower}")
+            
+            if 'upi' in payment_method_lower:
+                payment_type = "UPI"
+            elif any(card in payment_method_lower for card in ['debit', 'credit', 'card']):
+                payment_type = "Debit Card/Credit Card"
+            elif any(net in payment_method_lower for net in ['net banking', 'netbanking', 'internet banking', 'online', 'net_banking']):
+                payment_type = "Net Banking"
+            elif 'cash' in payment_method_lower:
+                payment_type = "Cash"
+            else:
+                payment_type = str(payment_method).title()  # Use original with title case
+            
+            logger.info(f"Final payment type: {payment_type}")
+        else:
+            logger.info("No payment method found, using default: Cash")
+        
+        # Generate token
+        token = getattr(appointment, 'TokenNumber', None) or \
+                getattr(appointment, 'token_number', None) or \
+                getattr(appointment, 'Token', None) or \
+                f"A{appointment.AppointmentID}"
+        
+        token_data.append(TokenData(
+            appointment_id=appointment.AppointmentID,
+            token=token,
+            patient_name=patient_name,
+            age=age,
+            doctor_name=doctor_name,
+            specialization=specialization,
+            checkin_time=checkin_time,
+            payment_type=payment_type,
+            is_paid=is_paid
+        ))
+    
+    return token_data
+
 @router.get("/getCheckinDetails", response_model=CheckinResponse)
 async def get_checkin_details_for_dashboard(
     FacilityID: int = Query(..., description="Facility ID"),
     Date: date = Query(..., description="Date in YYYY-MM-DD format (e.g., 2025-07-26)"),
     db: Session = Depends(get_db)
 ):
+    start_time = time_module.time()
+    logger.info(f"Starting checkin details query for facility {FacilityID} on {Date}")
+    
     try:
         day_of_week = get_day_of_week(Date)
         
-        facility = db.query(model.Facility).filter(model.Facility.FacilityID == FacilityID).first()
+        facility = db.query(model.Facility.FacilityID).filter(model.Facility.FacilityID == FacilityID).first()
         if not facility:
             raise HTTPException(status_code=404, detail="Facility not found")
         
+        # Optimized query with limited joins
         appointments = db.query(model.Appointment).filter(
-            and_(model.Appointment.FacilityID == FacilityID, model.Appointment.AppointmentDate == Date)
-        ).options(joinedload(model.Appointment.patient), joinedload(model.Appointment.doctor)).order_by(model.Appointment.AppointmentTime).all()
+            and_(
+                model.Appointment.FacilityID == FacilityID, 
+                model.Appointment.AppointmentDate == Date
+            )
+        ).options(
+            joinedload(model.Appointment.patient),
+            joinedload(model.Appointment.doctor)
+        ).order_by(model.Appointment.AppointmentTime).all()
         
         if not appointments:
             return CheckinResponse(
-                facility_id=FacilityID, date=Date.strftime("%Y-%m-%d"), day_of_week=day_of_week,
-                appointments=[], summary=CheckinSummary()
+                facility_id=FacilityID, 
+                date=Date.strftime("%Y-%m-%d"), 
+                day_of_week=day_of_week,
+                appointments=[], 
+                summary=CheckinSummary()
             )
         
         appointments_info = []
         checked_in_count = not_checked_in_count = cancelled_count = 0
         
         for appointment in appointments:
-            patient = appointment.patient
-            patient_name = f"{patient.firstname} {patient.lastname}"
-            doctor = appointment.doctor
-            # Combine doctor name with proper formatting
-            doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip()
-            
-            appointment_datetime = datetime.combine(appointment.AppointmentDate, appointment.AppointmentTime)
-            
-            checkin_time_str = None
-            checkin_status = "Not Checked In"
-            
-            if appointment.Cancelled:
-                checkin_status = "Cancelled"
-                cancelled_count += 1
-            elif appointment.CheckinTime:
-                checkin_time_str = appointment.CheckinTime.strftime("%Y-%m-%d %H:%M")
-                checkin_status = "Checked In"
-                checked_in_count += 1
-            else:
-                not_checked_in_count += 1
-            
-            appointments_info.append(PatientCheckinInfo(
-                appointment_id=appointment.AppointmentID, 
-                patient_id=appointment.PatientID, 
-                patient_name=patient_name,
-                patient_contact=patient.contact_number, 
-                patient_email=patient.email_id, 
-                patient_age=patient.age,
-                patient_gender=patient.gender, 
-                doctor_id=appointment.DoctorID, 
-                doctor_name=doctor_name,
-                doctor_specialization=doctor.specialization or "General", 
-                appointment_date=appointment.AppointmentDate.strftime("%Y-%m-%d"),
-                appointment_time=appointment.AppointmentTime.strftime("%H:%M"), 
-                scheduled_datetime=appointment_datetime.strftime("%Y-%m-%d %H:%M"),
-                reason=appointment.Reason, 
-                appointment_mode=appointment.AppointmentMode, 
-                appointment_status=appointment.AppointmentStatus or "Scheduled",
-                token_id=appointment.TokenID, 
-                checkin_time=checkin_time_str, 
-                checkin_status=checkin_status, 
-                cancelled=appointment.Cancelled
-            ))
+            try:
+                patient = appointment.patient
+                doctor = appointment.doctor
+                
+                if not patient or not doctor:
+                    logger.warning(f"Missing patient or doctor data for appointment {appointment.AppointmentID}")
+                    continue
+                
+                patient_name = f"{patient.firstname} {patient.lastname}".strip()
+                doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}".strip()
+                
+                appointment_datetime = datetime.combine(appointment.AppointmentDate, appointment.AppointmentTime)
+                
+                checkin_time_str = None
+                checkin_status = "Not Checked In"
+                
+                if appointment.Cancelled:
+                    checkin_status = "Cancelled"
+                    cancelled_count += 1
+                elif appointment.CheckinTime:
+                    checkin_time_str = appointment.CheckinTime.strftime("%Y-%m-%d %H:%M")
+                    checkin_status = "Checked In"
+                    checked_in_count += 1
+                else:
+                    not_checked_in_count += 1
+                
+                appointments_info.append(PatientCheckinInfo(
+                    appointment_id=appointment.AppointmentID, 
+                    patient_id=appointment.PatientID, 
+                    patient_name=patient_name,
+                    patient_contact=getattr(patient, 'contact_number', '') or '', 
+                    patient_email=getattr(patient, 'email_id', '') or '', 
+                    patient_age=getattr(patient, 'age', None),
+                    patient_gender=getattr(patient, 'gender', None), 
+                    doctor_id=appointment.DoctorID, 
+                    doctor_name=doctor_name,
+                    doctor_specialization=getattr(doctor, 'specialization', '') or "General", 
+                    appointment_date=appointment.AppointmentDate.strftime("%Y-%m-%d"),
+                    appointment_time=appointment.AppointmentTime.strftime("%H:%M"), 
+                    scheduled_datetime=appointment_datetime.strftime("%Y-%m-%d %H:%M"),
+                    reason=getattr(appointment, 'Reason', '') or '', 
+                    appointment_mode=getattr(appointment, 'AppointmentMode', '') or '', 
+                    appointment_status=getattr(appointment, 'AppointmentStatus', '') or "Scheduled",
+                    token_id=getattr(appointment, 'TokenID', None), 
+                    checkin_time=checkin_time_str, 
+                    checkin_status=checkin_status, 
+                    cancelled=bool(appointment.Cancelled)
+                ))
+                
+            except Exception as e:
+                logger.error(f"Error processing appointment {appointment.AppointmentID}: {str(e)}")
+                continue
         
         summary = CheckinSummary(
             total_appointments=len(appointments), 
@@ -607,6 +825,8 @@ async def get_checkin_details_for_dashboard(
             not_checked_in=not_checked_in_count, 
             cancelled=cancelled_count
         )
+        
+        logger.info(f"Checkin details query completed in {time_module.time() - start_time:.2f}s")
         
         return CheckinResponse(
             facility_id=FacilityID, 
@@ -619,4 +839,5 @@ async def get_checkin_details_for_dashboard(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error in get_checkin_details_for_dashboard: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving check-in details: {str(e)}")
