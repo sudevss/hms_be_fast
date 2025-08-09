@@ -60,6 +60,7 @@ class DashboardAppointmentCreate(BaseModel):
     Reason: str
     AppointmentMode: str = "A"  # Default to Appointment mode
     room_id: Optional[int] = 1  # Default room
+    payment_status: Optional[int] = 0  # Added payment status field (0 = unpaid, 1 = paid)
 
     @validator('AppointmentTime', pre=True)
     def parse_time(cls, v):
@@ -81,6 +82,12 @@ class DashboardAppointmentCreate(BaseModel):
     def validate_appointment_date(cls, v):
         if v < date.today():
             raise ValueError("Appointment date cannot be in the past")
+        return v
+
+    @validator('payment_status')
+    def validate_payment_status(cls, v):
+        if v not in [0, 1]:
+            raise ValueError("Payment status must be 0 (unpaid) or 1 (paid)")
         return v
 
     class Config:
@@ -156,6 +163,7 @@ class QuickAppointmentCreate(BaseModel):
     AppointmentTime: time
     Reason: str
     AppointmentMode: str = "A"  # Default to Appointment mode
+    payment_status: Optional[int] = 0  # Added payment status field (0 = unpaid, 1 = paid)
 
     @validator('PatientID')
     def validate_patient_id(cls, v):
@@ -183,6 +191,12 @@ class QuickAppointmentCreate(BaseModel):
     def validate_appointment_date(cls, v):
         if v < date.today():
             raise ValueError("Appointment date cannot be in the past")
+        return v
+
+    @validator('payment_status')
+    def validate_payment_status(cls, v):
+        if v not in [0, 1]:
+            raise ValueError("Payment status must be 0 (unpaid) or 1 (paid)")
         return v
 
     class Config:
@@ -250,7 +264,7 @@ def dashboard_book_appointment(
             patient_email = booking_data.patient_info.email_id or f"{phone_number}@temp.com"
             patient_disease = booking_data.patient_info.disease or "General consultation"
             
-            # Create new patient
+            # Create new patient with payment status
             new_patient = model.Patients(
                 firstname=booking_data.patient_info.firstname,
                 lastname=booking_data.patient_info.lastname,
@@ -262,7 +276,7 @@ def dashboard_book_appointment(
                 email_id=patient_email,
                 disease=patient_disease,
                 room_id=booking_data.room_id,
-                payment_status=0,  # Default to unpaid
+                payment_status=booking_data.payment_status,  # Use the payment status from request
                 ABDM_ABHA_id=booking_data.patient_info.ABDM_ABHA_id,
                 FacilityID=facility_id
             )
@@ -343,10 +357,11 @@ def dashboard_book_appointment(
             AppointmentStatus=new_appointment.AppointmentStatus
         )
         
+        payment_msg = "paid" if booking_data.payment_status == 1 else "unpaid"
         success_message = (
-            f"New patient created and appointment booked successfully" 
+            f"New patient created and appointment booked successfully ({payment_msg})" 
             if is_new_patient 
-            else f"Appointment booked successfully for existing patient"
+            else f"Appointment booked successfully for existing patient ({payment_msg})"
         )
         
         return DashboardAppointmentResponse(
@@ -373,6 +388,7 @@ def dashboard_patient_lookup(
     Lookup ALL patients registered with the same phone number
     Can optionally filter by facility_id, or search across all facilities
     Returns comprehensive patient information and recent appointment history for each patient
+    Shows ALL appointments (scheduled/cancelled/completed)
     """
     try:
         # Clean phone number
@@ -411,15 +427,12 @@ def dashboard_patient_lookup(
         # Gather details & recent history
         patient_details_list = []
         for patient in patients:
-            # Recent appointments
+            # Recent appointments - REMOVED the Cancelled == False filter to show ALL appointments
             recent_appointments = (
                 db.query(model.Appointment)
-                .filter(
-                    model.Appointment.PatientID == patient.id,
-                    model.Appointment.Cancelled == False
-                )
+                .filter(model.Appointment.PatientID == patient.id)
                 .order_by(model.Appointment.AppointmentDate.desc())
-                .limit(5)
+                .limit(10)  # Increased limit to show more appointments since we're including all statuses
                 .all()
             )
             
@@ -449,6 +462,15 @@ def dashboard_patient_lookup(
                     f"Facility {apt.FacilityID}"
                 )
                 
+                # Determine appointment status with better logic
+                status = "Scheduled"  # Default status
+                if apt.Cancelled:
+                    status = "Cancelled"
+                elif apt.AppointmentStatus:
+                    status = apt.AppointmentStatus
+                elif apt.CheckinTime:
+                    status = "Checked In"
+                
                 appointment_history.append({
                     "appointment_id": apt.AppointmentID,
                     "date": apt.AppointmentDate.isoformat(),
@@ -456,9 +478,17 @@ def dashboard_patient_lookup(
                     "doctor": doctor_name,
                     "facility": facility_name,
                     "reason": apt.Reason,
-                    "status": apt.AppointmentStatus or "Scheduled",
-                    "mode": apt.AppointmentMode
+                    "status": status,
+                    "mode": apt.AppointmentMode,
+                    "cancelled": apt.Cancelled,  # Added explicit cancelled flag
+                    "checkin_time": apt.CheckinTime.isoformat() if apt.CheckinTime else None,  # Added checkin info
+                    "token_id": apt.TokenID  # Added token info
                 })
+            
+            # Count appointment statistics for this patient
+            total_appointments = len(appointment_history)
+            cancelled_count = sum(1 for apt in appointment_history if apt["cancelled"])
+            active_count = total_appointments - cancelled_count
             
             # Build patient detail
             patient_details_list.append(PatientDetails(
@@ -478,8 +508,10 @@ def dashboard_patient_lookup(
                 recent_appointments=appointment_history
             ))
         
-        # Summary message
+        # Summary message with appointment statistics
         total = len(patients)
+        total_all_appointments = sum(len(p.recent_appointments) for p in patient_details_list)
+        
         if total == 1:
             message = f"Found 1 patient with phone number {clean_phone}"
         else:
@@ -495,6 +527,10 @@ def dashboard_patient_lookup(
             if len(counts) > 1:
                 parts = [f"{cnt} in facility {fid}" for fid, cnt in counts.items()]
                 message += f" across facilities ({', '.join(parts)})"
+        
+        # Add appointment summary to message
+        if total_all_appointments > 0:
+            message += f". Total recent appointments: {total_all_appointments} (including cancelled/completed)"
         
         message += ". Select a patient to book appointment or create new patient."
         
@@ -536,6 +572,11 @@ def book_appointment_for_existing_patient(
         
         if not existing_patient:
             raise HTTPException(404, f"Patient with ID {patient_id} not found in facility {facility_id}")
+        
+        # Update existing patient's payment status if provided
+        if booking_data.payment_status is not None:
+            existing_patient.payment_status = booking_data.payment_status
+            db.flush()
         
         # Prepare patient info for response
         patient_dict = {
@@ -610,11 +651,12 @@ def book_appointment_for_existing_patient(
             AppointmentStatus=new_appointment.AppointmentStatus
         )
         
+        payment_msg = "paid" if booking_data.payment_status == 1 else "unpaid"
         return DashboardAppointmentResponse(
             appointment=appointment_response,
             patient=patient_dict,
             is_new_patient=False,
-            message=f"Appointment booked successfully for {patient_dict['name']}"
+            message=f"Appointment booked successfully for {patient_dict['name']} ({payment_msg})"
         )
         
     except HTTPException:
