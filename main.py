@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Depends, HTTPException
-import suppress_warnings
+
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -138,4 +138,5 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
 
 # 404 Utility
 def get_notfound_exception():
+
     raise HTTPException(status_code=404, detail="Entry not found")
