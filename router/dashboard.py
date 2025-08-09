@@ -379,30 +379,39 @@ async def get_doctor_details_for_dashboard(
         doctor_filter_info = {}
         filtered_doctor_ids = []
         
-        if DoctorID is not None:
+        # Apply doctor ID filter only if provided and not None
+        if DoctorID is not None and DoctorID > 0:
             appointments_query = appointments_query.filter(model.Appointment.DoctorID == DoctorID)
             doctor_filter_info["doctor_id"] = DoctorID
             filtered_doctor_ids = [DoctorID]
+            logger.info(f"Filtering by Doctor ID: {DoctorID}")
             
-        if DoctorName is not None:
+        # Apply doctor name filter only if provided and not empty
+        elif DoctorName is not None and DoctorName.strip():
             # Find doctors matching the name
             matching_doctors = db.query(model.Doctors.id).filter(
                 and_(
                     model.Doctors.FacilityID == FacilityID,
-                    func.concat(model.Doctors.firstname, ' ', model.Doctors.lastname).ilike(f"%{DoctorName}%")
+                    func.concat(model.Doctors.firstname, ' ', model.Doctors.lastname).ilike(f"%{DoctorName.strip()}%")
                 )
             ).all()
             
             if matching_doctors:
                 matching_doctor_ids = [doctor.id for doctor in matching_doctors]
                 appointments_query = appointments_query.filter(model.Appointment.DoctorID.in_(matching_doctor_ids))
-                doctor_filter_info["doctor_name"] = DoctorName
+                doctor_filter_info["doctor_name"] = DoctorName.strip()
                 filtered_doctor_ids = matching_doctor_ids
+                logger.info(f"Filtering by Doctor Name: {DoctorName.strip()}, found IDs: {matching_doctor_ids}")
             else:
                 # No matching doctors found
+                logger.warning(f"No doctors found matching name: {DoctorName}")
                 return create_empty_response_with_all_doctors(FacilityID, Date, day_of_week, doctor_filter_info, all_doctors, db)
+        else:
+            # No filters applied - show all doctors' appointments
+            logger.info("No doctor filters applied, showing all appointments")
 
         appointments = appointments_query.options(joinedload(model.Appointment.patient)).all()
+        logger.info(f"Found {len(appointments)} appointments for the query")
 
         # Get hourly booking data (only for filtered appointments)
         hourly_data = get_hourly_booking_data_optimized(appointments)
@@ -436,8 +445,6 @@ async def get_doctor_details_for_dashboard(
     except Exception as e:
         logger.error(f"Error in get_doctor_details_for_dashboard: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving dashboard data: {str(e)}")
-
-
 def calculate_summary_for_filtered_doctors(appointments: List[model.Appointment], doctor_ids: List[int], 
                                          db: Session, facility_id: int, date: date) -> DoctorSummary:
     """Calculate summary with available slots based on specific filtered doctors only"""
