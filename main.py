@@ -1,68 +1,30 @@
-from fastapi import FastAPI, Request, Depends, HTTPException
 
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.middleware.cors import CORSMiddleware 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 import os
-
 
 # Load environment variables from .env file
 load_dotenv()
 
 from database import engine, Base, SessionLocal, get_db
 
+
+
 from router import (
     auth, doctors, patients, usermaster, facility,
     slot_lookup, doctor_schedule, doctor_calendar,
-    appointment, medical_record, billing, medical_document, login, dashboard, new_booking
+    appointment, medical_record, billing, medical_document,login,dashboard,new_booking
 )
 
 import model
 
 # Initialize FastAPI app
 app = FastAPI()
-
-# Add CORS middleware - THIS IS THE KEY ADDITION
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # React dev server
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:8080",  # Vue dev server
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:8080",
-        "https://your-frontend-domain.vercel.app",  # Replace with your actual frontend domain
-        "https://your-frontend-domain.com",  # Replace with your actual frontend domain
-        # Add any other domains that need access to your API
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=[
-        "Accept",
-        "Accept-Language",
-        "Content-Language",
-        "Content-Type",
-        "Authorization",
-        "X-Requested-With",
-        "X-CSRF-Token",
-        "Cache-Control",
-    ],
-)
-
-# Alternative for development - allows all origins (less secure)
-# Uncomment this and comment the above if you want to allow all origins during development
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
 
 # Jinja2 templates directory
 templates = Jinja2Templates(directory="templates")
@@ -92,7 +54,7 @@ try:
         print("✅ Razorpay configured")
     else:
         razorpay_client = None
-        print("⚠️ Razorpay keys not configured. Payments disabled.")
+        print("⚠ Razorpay keys not configured. Payments disabled.")
 except Exception as e:
     razorpay_client = None
     print(f"❌ Razorpay setup failed: {str(e)}")
@@ -113,6 +75,7 @@ app.include_router(medical_document.router)
 app.include_router(login.router)
 app.include_router(dashboard.router)
 app.include_router(new_booking.router)
+
 
 # Home route (API root info)
 @app.get("/")
@@ -138,5 +101,4 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
 
 # 404 Utility
 def get_notfound_exception():
-
     raise HTTPException(status_code=404, detail="Entry not found")
