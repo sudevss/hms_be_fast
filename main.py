@@ -1,8 +1,8 @@
-
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware  # Add this import
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
@@ -12,8 +12,6 @@ import os
 load_dotenv()
 
 from database import engine, Base, SessionLocal, get_db
-
-
 
 from router import (
     auth, doctors, patients, usermaster, facility,
@@ -25,6 +23,15 @@ import model
 
 # Initialize FastAPI app
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Jinja2 templates directory
 templates = Jinja2Templates(directory="templates")
@@ -75,7 +82,6 @@ app.include_router(medical_document.router)
 app.include_router(login.router)
 app.include_router(dashboard.router)
 app.include_router(new_booking.router)
-
 
 # Home route (API root info)
 @app.get("/")
