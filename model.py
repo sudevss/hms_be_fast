@@ -1,26 +1,25 @@
-
 from sqlalchemy.orm import relationship
-from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean,DECIMAL,Numeric
+from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean, Numeric
 from database import Base
 import sqlalchemy as sa
 
 class Patients(Base):
-    __tablename__ = "patients"  # ✅ Fix: double underscores
+    __tablename__ = "patients"
 
     id = Column(Integer, primary_key=True, index=True)
-    firstname = Column(String, index=True, nullable=False)
-    lastname = Column(String, index=True, nullable=False)
+    firstname = Column(String(100), index=True, nullable=False)
+    lastname = Column(String(100), index=True, nullable=False)
     dob = Column(Date)
     age = Column(Integer)
-    contact_number = Column(String, nullable=False)
-    address = Column(String)
+    contact_number = Column(String(20), nullable=False)
+    address = Column(String(200))
     gender = Column(String(1))
-    ABDM_ABHA_id = Column(String, nullable=True)
-    email_id = Column(String, nullable=False)
-    disease = Column(String)
+    ABDM_ABHA_id = Column(String(50), nullable=True)
+    email_id = Column(String(200), nullable=False)
+    disease = Column(String(200))
     room_id = Column(Integer)
     payment_status = Column(Integer, default=0)
-    order_id = Column(String, default=None)
+    order_id = Column(String(50), default=None)
     amount = Column(Integer, default=0)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
     payment_method = Column(String(50), default="Cash")
@@ -36,17 +35,19 @@ class Patients(Base):
     medical_records = relationship("MedicalRecord", back_populates="patient")
     medical_documents = relationship("MedicalDocument", back_populates="patient")
     last_visited_doctor = relationship("Doctors", foreign_keys=[last_visited_doctor_id])
+
+
 class Doctors(Base):
     __tablename__ = "doctors"
 
     id = Column(Integer, primary_key=True, index=True)
-    firstname = Column(String, nullable=False, index=True)
-    lastname = Column(String, nullable=False, index=True)
-    specialization = Column(String)
-    phone_number = Column(String)
-    email = Column(String, index=True)
-    consultation_fee = Column(Numeric(10, 2))  # Using Numeric for precise currency handling
-    ABDM_NHPR_id = Column(String)
+    firstname = Column(String(100), nullable=False, index=True)  # Added length
+    lastname = Column(String(100), nullable=False, index=True)   # Added length
+    specialization = Column(String(100))                         # Added length
+    phone_number = Column(String(20))                            # Added length
+    email = Column(String(200), index=True)                      # Added length
+    consultation_fee = Column(Numeric(10, 2))
+    ABDM_NHPR_id = Column(String(100))                          # Added length
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     facility = relationship("Facility", foreign_keys=[FacilityID], back_populates="doctors")
@@ -55,25 +56,28 @@ class Doctors(Base):
     medical_records = relationship("MedicalRecord", back_populates="doctor")
     medical_documents = relationship("MedicalDocument", back_populates="doctor")
 
+
 class UserMaster(Base):
     __tablename__ = "usermaster"
 
     UserID = Column(Integer, primary_key=True, index=True)
     UserName = Column(String(50))
-    Password = Column(String(50))
+    Password = Column(String(100))                               # Increased length for hashed passwords
     Role = Column(String(20))
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     facility = relationship("Facility", back_populates="users")
 
+
 class Admin(Base):
     __tablename__ = "admin"
 
-    username = Column(String, primary_key=True, index=True)
-    hashed_pass = Column(String)
+    username = Column(String(50), primary_key=True, index=True)  # Added length - THIS WAS THE MAIN ERROR
+    hashed_pass = Column(String(255))                            # Added length for hashed passwords
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     facility = relationship("Facility")
+
 
 class Facility(Base):
     __tablename__ = "facility"
@@ -89,30 +93,35 @@ class Facility(Base):
     doctors = relationship("Doctors", foreign_keys="Doctors.FacilityID", back_populates="facility")
     schedules = relationship("DoctorSchedule", back_populates="facility")
     appointments = relationship("Appointment", back_populates="facility")
+
+
 class SlotLookup(Base):
-    __tablename__ = "slot_lookup"  # <-- Fix underscore bug here
+    __tablename__ = "slot_lookup"
 
     SlotID = Column(Integer, primary_key=True, index=True)
     SlotSize = Column(String(10))
-    SlotStartTime = Column(Time)  # <-- FIXED
-    SlotEndTime = Column(Time)    # <-- FIXED
+    SlotStartTime = Column(Time)
+    SlotEndTime = Column(Time)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     facility = relationship("Facility")
+
+
 class DoctorSchedule(Base):
     __tablename__ = "doctor_schedule"
 
     ScheduleID = Column(Integer, primary_key=True, index=True)
     DoctorID = Column(Integer, ForeignKey("doctors.id"))
     DayOfWeek = Column(String(10))
-    StartTime = Column(String)
-    EndTime = Column(String)
+    StartTime = Column(String(10))                               # Added length
+    EndTime = Column(String(10))                                 # Added length
     Slotsize = Column(String(10))
     AppointmentsPerSlot = Column(Integer)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     doctor = relationship("Doctors", back_populates="schedules")
     facility = relationship("Facility", back_populates="schedules")
+
 
 class DoctorCalendar(Base):
     __tablename__ = "doctor_calendar"
@@ -131,6 +140,7 @@ class DoctorCalendar(Base):
     doctor = relationship("Doctors")
     slot = relationship("SlotLookup")
 
+
 class Appointment(Base):
     __tablename__ = "appointment"
 
@@ -143,11 +153,10 @@ class Appointment(Base):
 
     AppointmentDate = Column(Date, nullable=False)
     AppointmentTime = Column(Time, nullable=False)
-    Reason = Column(String(100), nullable=False)
+    Reason = Column(String(200), nullable=False)                 # Increased length
     CheckinTime = Column(DateTime, nullable=True)
     Cancelled = Column(Boolean, nullable=False, default=False, server_default=sa.sql.expression.false())
-    
-    # ✅ Corrected from Integer → String
+
     TokenID = Column(String(20), nullable=True)
 
     AppointmentMode = Column(String(50), nullable=False)
@@ -159,6 +168,7 @@ class Appointment(Base):
     facility = relationship("Facility", back_populates="appointments")
     calendar = relationship("DoctorCalendar")
 
+
 class MedicalRecord(Base):
     __tablename__ = "medical_record"
 
@@ -166,10 +176,10 @@ class MedicalRecord(Base):
     PatientID = Column(Integer, ForeignKey("patients.id"))
     DoctorID = Column(Integer, ForeignKey("doctors.id"))
     AppointmentID = Column(Integer, ForeignKey("appointment.AppointmentID"))
-    Diagnosis = Column(String(100))
-    Treatment = Column(String(100))
-    Medicine_Prescription = Column(String(100))
-    Lab_Prescription = Column(String(100))
+    Diagnosis = Column(String(500))                              # Increased length
+    Treatment = Column(String(500))                              # Increased length
+    Medicine_Prescription = Column(String(1000))                 # Increased length for prescriptions
+    Lab_Prescription = Column(String(1000))                      # Increased length for lab orders
     RecordDate = Column(DateTime)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
@@ -178,8 +188,9 @@ class MedicalRecord(Base):
     appointment = relationship("Appointment")
     facility = relationship("Facility")
 
+
 class Billing(Base):
-    __tablename__= "billing"
+    __tablename__ = "billing"
 
     BillID = Column(Integer, primary_key=True, index=True)
     AppointmentID = Column(Integer, ForeignKey("appointment.AppointmentID"))
@@ -187,21 +198,22 @@ class Billing(Base):
     BillDate = Column(DateTime)
     PaymentStatus = Column(String(20))
     PaymentMode = Column(String(100))
-    TransactionID = Column(String(20))
+    TransactionID = Column(String(50))                           # Increased length
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     appointment = relationship("Appointment")
     facility = relationship("Facility")
 
+
 class MedicalDocument(Base):
-    __tablename__= "medical_document"
+    __tablename__ = "medical_document"
 
     DocumentID = Column(Integer, primary_key=True, index=True)
     AppointmentID = Column(Integer, ForeignKey("appointment.AppointmentID"))
     PatientID = Column(Integer, ForeignKey("patients.id"))
     DoctorID = Column(Integer, ForeignKey("doctors.id"))
     DocumentType = Column(String(100))
-    DocumentPath = Column(String(100))
+    DocumentPath = Column(String(255))                           # Increased length for file paths
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
     appointment = relationship("Appointment")

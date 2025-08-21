@@ -4,6 +4,8 @@ from sqlalchemy import func, extract
 from typing import List, Optional
 from datetime import date, datetime, time
 from pydantic import BaseModel, validator
+from model import Appointment, DoctorCalendar, Patients, Doctors
+
 
 from database import get_db
 from model import Appointment, DoctorCalendar
@@ -156,9 +158,17 @@ class AppointmentResponse(BaseModel):
     Cancelled: Optional[bool] = None
     TokenID: Optional[str] = None
     AppointmentStatus: Optional[str] = None
+    # New fields
+    name: Optional[str] = None  # Patient name
+    phone: Optional[str] = None  # Patient phone number
+    doctor: Optional[str] = None  # Doctor name
+    time_slot: Optional[str] = None  # Formatted time slot
+    paid: Optional[bool] = None  # Payment status
+    consultation_fee: Optional[float] = None  # Doctor's consultation fee
 
     class Config:
         from_attributes = True
+
 
 
 class CheckinResponse(BaseModel):
@@ -204,17 +214,62 @@ class AppointmentDetailsResponse(BaseModel):
 @router.get("/", response_model=List[AppointmentResponse])
 def get_all_appointments(
     facility_id: int = Query(..., alias="FacilityID"),
-    starts_from: int = Query(0, ge=0),
-    max_results: int = Query(10, le=100),
+    date: date = Query(...),
+    # starts_from: int = Query(0, ge=0),
+    # max_results: int = Query(10, le=100),
     db: Session = Depends(get_db)
 ):
-    return (
-        db.query(Appointment)
+    # Modified query to include joins with Patients and Doctors tables
+    results = (
+        db.query(
+            Appointment,
+            Patients.firstname.label('patient_firstname'),
+            Patients.lastname.label('patient_lastname'),
+            Patients.contact_number.label('patient_phone'),
+            Patients.is_paid.label('patient_paid'),
+            Doctors.firstname.label('doctor_firstname'),
+            Doctors.lastname.label('doctor_lastname'),
+            Doctors.consultation_fee.label('doctor_consultation_fee')
+        )
+        .join(Patients, Appointment.PatientID == Patients.id)
+        .join(Doctors, Appointment.DoctorID == Doctors.id)
         .filter(Appointment.FacilityID == facility_id)
-        .offset(starts_from)
-        .limit(max_results)
+        .filter(Appointment.AppointmentDate == date)
+        .filter(Appointment.CheckinTime == None)
+        # .offset(starts_from)
+        # .limit(max_results)
         .all()
     )
+    
+    # Format the results to include the new fields
+    formatted_results = []
+    for appointment, patient_firstname, patient_lastname, patient_phone, patient_paid, doctor_firstname, doctor_lastname, doctor_consultation_fee in results:
+        # Create appointment dict from the appointment object
+        appointment_dict = {
+            "AppointmentID": appointment.AppointmentID,
+            "PatientID": appointment.PatientID,
+            "DoctorID": appointment.DoctorID,
+            "FacilityID": appointment.FacilityID,
+            "DCID": appointment.DCID,
+            "AppointmentDate": appointment.AppointmentDate,
+            "AppointmentTime": appointment.AppointmentTime,
+            "Reason": appointment.Reason,
+            "AppointmentMode": appointment.AppointmentMode,
+            "CheckinTime": appointment.CheckinTime,
+            "Cancelled": appointment.Cancelled,
+            "TokenID": appointment.TokenID,
+            "AppointmentStatus": appointment.AppointmentStatus,
+            # Add the new fields
+            "name": f"{patient_firstname} {patient_lastname}".strip(),
+            "phone": patient_phone,
+            "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
+            "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
+            "paid": patient_paid,
+            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None
+        }
+        formatted_results.append(AppointmentResponse(**appointment_dict))
+    
+    return formatted_results
 
 
 @router.get("/{appointment_id}", response_model=AppointmentResponse)
@@ -223,17 +278,58 @@ def get_appointment(
     facility_id: int = Query(..., alias="FacilityID"),
     db: Session = Depends(get_db)
 ):
-    appt = (
-        db.query(Appointment)
+    # Use the same join logic as get_all_appointments
+    result = (
+        db.query(
+            Appointment,
+            Patients.firstname.label('patient_firstname'),
+            Patients.lastname.label('patient_lastname'),
+            Patients.contact_number.label('patient_phone'),
+            Patients.is_paid.label('patient_paid'),
+            Doctors.firstname.label('doctor_firstname'),
+            Doctors.lastname.label('doctor_lastname'),
+            Doctors.consultation_fee.label('doctor_consultation_fee')
+        )
+        .join(Patients, Appointment.PatientID == Patients.id)
+        .join(Doctors, Appointment.DoctorID == Doctors.id)
         .filter(
             Appointment.AppointmentID == appointment_id,
             Appointment.FacilityID == facility_id
         )
         .first()
     )
-    if not appt:
+    
+    if not result:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    return appt
+    
+    # Unpack the result
+    appointment, patient_firstname, patient_lastname, patient_phone, patient_paid, doctor_firstname, doctor_lastname, doctor_consultation_fee = result
+    
+    # Format the result to include the new fields
+    appointment_dict = {
+        "AppointmentID": appointment.AppointmentID,
+        "PatientID": appointment.PatientID,
+        "DoctorID": appointment.DoctorID,
+        "FacilityID": appointment.FacilityID,
+        "DCID": appointment.DCID,
+        "AppointmentDate": appointment.AppointmentDate,
+        "AppointmentTime": appointment.AppointmentTime,
+        "Reason": appointment.Reason,
+        "AppointmentMode": appointment.AppointmentMode,
+        "CheckinTime": appointment.CheckinTime,
+        "Cancelled": appointment.Cancelled,
+        "TokenID": appointment.TokenID,
+        "AppointmentStatus": appointment.AppointmentStatus,
+        # Add the new fields
+        "name": f"{patient_firstname} {patient_lastname}".strip(),
+        "phone": patient_phone,
+        "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
+        "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
+        "paid": patient_paid,
+        "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None
+    }
+    
+    return AppointmentResponse(**appointment_dict)
 
 
 @router.post("/", response_model=AppointmentResponse)
@@ -272,12 +368,60 @@ def create_appointment(
         db.add(new_appt)
         db.commit()
         db.refresh(new_appt)
-        return new_appt
+        
+        # Fetch the created appointment with joined data (same logic as get_appointment)
+        result = (
+            db.query(
+                Appointment,
+                Patients.firstname.label('patient_firstname'),
+                Patients.lastname.label('patient_lastname'),
+                Patients.contact_number.label('patient_phone'),
+                Patients.is_paid.label('patient_paid'),
+                Doctors.firstname.label('doctor_firstname'),
+                Doctors.lastname.label('doctor_lastname'),
+                Doctors.consultation_fee.label('doctor_consultation_fee')
+            )
+            .join(Patients, Appointment.PatientID == Patients.id)
+            .join(Doctors, Appointment.DoctorID == Doctors.id)
+            .filter(Appointment.AppointmentID == new_appt.AppointmentID)
+            .first()
+        )
+        
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to fetch created appointment")
+        
+        # Unpack the result
+        appointment, patient_firstname, patient_lastname, patient_phone, patient_paid, doctor_firstname, doctor_lastname, doctor_consultation_fee = result
+        
+        # Format the result to include the new fields
+        appointment_dict = {
+            "AppointmentID": appointment.AppointmentID,
+            "PatientID": appointment.PatientID,
+            "DoctorID": appointment.DoctorID,
+            "FacilityID": appointment.FacilityID,
+            "DCID": appointment.DCID,
+            "AppointmentDate": appointment.AppointmentDate,
+            "AppointmentTime": appointment.AppointmentTime,
+            "Reason": appointment.Reason,
+            "AppointmentMode": appointment.AppointmentMode,
+            "CheckinTime": appointment.CheckinTime,
+            "Cancelled": appointment.Cancelled,
+            "TokenID": appointment.TokenID,
+            "AppointmentStatus": appointment.AppointmentStatus,
+            # Add the new fields
+            "name": f"{patient_firstname} {patient_lastname}".strip(),
+            "phone": patient_phone,
+            "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
+            "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
+            "paid": patient_paid,
+            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None
+        }
+        
+        return AppointmentResponse(**appointment_dict)
+        
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error creating appointment: {str(e)}")
-
-
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
@@ -399,7 +543,6 @@ def cancel_appointment(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error cancelling appointment: {str(e)}")
 
-
 @router.patch("/{appointment_id}", response_model=AppointmentResponse)
 def update_appointment(
     appointment_id: int,
@@ -509,11 +652,63 @@ def update_appointment(
     try:
         db.commit()
         db.refresh(appt)
-        return appt
+        
+        # Fetch the updated appointment with joined data (same as get_appointment)
+        result = (
+            db.query(
+                Appointment,
+                Patients.firstname.label('patient_firstname'),
+                Patients.lastname.label('patient_lastname'),
+                Patients.contact_number.label('patient_phone'),
+                Patients.is_paid.label('patient_paid'),
+                Doctors.firstname.label('doctor_firstname'),
+                Doctors.lastname.label('doctor_lastname'),
+                Doctors.consultation_fee.label('doctor_consultation_fee')
+            )
+            .join(Patients, Appointment.PatientID == Patients.id)
+            .join(Doctors, Appointment.DoctorID == Doctors.id)
+            .filter(
+                Appointment.AppointmentID == appointment_id,
+                Appointment.FacilityID == facility_id
+            )
+            .first()
+        )
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Updated appointment not found")
+        
+        # Unpack the result
+        appointment, patient_firstname, patient_lastname, patient_phone, patient_paid, doctor_firstname, doctor_lastname, doctor_consultation_fee = result
+        
+        # Format the result to include the new fields
+        appointment_dict = {
+            "AppointmentID": appointment.AppointmentID,
+            "PatientID": appointment.PatientID,
+            "DoctorID": appointment.DoctorID,
+            "FacilityID": appointment.FacilityID,
+            "DCID": appointment.DCID,
+            "AppointmentDate": appointment.AppointmentDate,
+            "AppointmentTime": appointment.AppointmentTime,
+            "Reason": appointment.Reason,
+            "AppointmentMode": appointment.AppointmentMode,
+            "CheckinTime": appointment.CheckinTime,
+            "Cancelled": appointment.Cancelled,
+            "TokenID": appointment.TokenID,
+            "AppointmentStatus": appointment.AppointmentStatus,
+            # Add the new fields
+            "name": f"{patient_firstname} {patient_lastname}".strip(),
+            "phone": patient_phone,
+            "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
+            "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
+            "paid": patient_paid,
+            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None
+        }
+        
+        return AppointmentResponse(**appointment_dict)
+        
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
 
 @router.delete("/{appointment_id}")
 def delete_appointment(
