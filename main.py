@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.middleware.cors import CORSMiddleware  # Add this import
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
@@ -16,7 +16,8 @@ from database import engine, Base, SessionLocal, get_db
 from router import (
     auth, doctors, patients, usermaster, facility,
     slot_lookup, doctor_schedule, doctor_calendar,
-    appointment, medical_record, billing, medical_document,login,dashboard,new_booking
+    appointment, medical_record, billing,
+    medical_document, login, dashboard, new_booking
 )
 
 import model
@@ -27,17 +28,17 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],  # ✅ Allows all origins (dev mode). In production, replace with ["https://yourfrontend.com"]
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Jinja2 templates directory
 templates = Jinja2Templates(directory="templates")
 
-# Create tables
-model.Base.metadata.create_all(bind=engine)
+# ❌ Removed create_all — Alembic should handle schema migrations
+# model.Base.metadata.create_all(bind=engine)
 
 # Dummy model for Razorpay Payment - if needed
 class PatientPayment(BaseModel):
@@ -48,7 +49,8 @@ class PatientPayment(BaseModel):
     amount: int
 
     class Config:
-        from_attributes = True  # Updated from Pydantic V2
+        from_attributes = True  # Pydantic V2 compatible
+
 
 # Razorpay Setup - SAFE fallback
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
@@ -65,6 +67,7 @@ try:
 except Exception as e:
     razorpay_client = None
     print(f"❌ Razorpay setup failed: {str(e)}")
+
 
 # Include all routers
 app.include_router(auth.router)
@@ -83,6 +86,7 @@ app.include_router(login.router)
 app.include_router(dashboard.router)
 app.include_router(new_booking.router)
 
+
 # Home route (API root info)
 @app.get("/")
 async def hello():
@@ -90,10 +94,11 @@ async def hello():
         "message": "This is just backend part of the HMS project. Please type '/docs' in the URL to see the API documentation (OpenAPI)."
     }
 
+
 # Payment Gateway Page (HTML landing with order info)
 @app.get("/payment_gateway", response_class=HTMLResponse, tags=["patients"])
 async def read_item(request: Request, order_ID: str, db: Session = Depends(get_db)):
-    patient = db.query(model.Patients).filter(order_ID == model.Patients.order_id).first()
+    patient = db.query(model.Patients).filter(model.Patients.order_id == order_ID).first()
 
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -104,6 +109,7 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
         "order_id": order_ID,
         "name": patient.name
     })
+
 
 # 404 Utility
 def get_notfound_exception():
