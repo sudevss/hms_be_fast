@@ -467,7 +467,18 @@ def checkin_appointment(
         )
 
         token_id = f"{prefix}{count + 1}"
-        checkin_time = datetime.now().replace(second=0, microsecond=0)
+        
+        # SOLUTION 1: Use current datetime without modification for accurate time
+        checkin_time = datetime.now()
+        
+        # SOLUTION 2: If you need to use UTC time, uncomment the line below:
+        # from datetime import timezone
+        # checkin_time = datetime.now(timezone.utc)
+        
+        # SOLUTION 3: If you need to use a specific timezone (e.g., Indian timezone):
+        # import pytz
+        # indian_tz = pytz.timezone('Asia/Kolkata')
+        # checkin_time = datetime.now(indian_tz)
 
         # Update appointment with checkin details
         appt.TokenID = token_id
@@ -488,7 +499,6 @@ def checkin_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
-
 
 @router.post("/{appointment_id}/cancel", response_model=CancelResponse)
 def cancel_appointment(

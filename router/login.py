@@ -315,5 +315,6 @@ def get_current_user_info(current_user: CurrentUser = Depends(get_current_user),
             FacilityName=facility.FacilityName,
             FacilityAddress=facility.FacilityAddress,
             TaxNumber=facility.TaxNumber
+            
         )
     }
