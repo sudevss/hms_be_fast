@@ -13,7 +13,7 @@ class Patients(Base):
     age = Column(Integer)
     contact_number = Column(String(20), nullable=False)
     address = Column(String(200))
-    gender = Column(String(1))
+    gender = Column(String(10))  # or String(20) to be safe
     ABDM_ABHA_id = Column(String(50), nullable=True)
     email_id = Column(String(200), nullable=False)
     disease = Column(String(200))
