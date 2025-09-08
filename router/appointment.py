@@ -221,7 +221,7 @@ def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointmen
             DoctorBookedSlots.Slot_date == appointment_date,
             DoctorBookedSlots.Start_Time <= appointment_time,
             DoctorBookedSlots.End_Time > appointment_time,
-            DoctorBookedSlots.Booked_status == 'N'
+            DoctorBookedSlots.Booked_status == 'Not Booked'
         )
         .first()
     )
@@ -259,7 +259,7 @@ def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointmen
         Slot_date=appointment_date,
         Start_Time=schedule.Slot_Start_Time,
         End_Time=schedule.Slot_End_Time,
-        Booked_status='N'  # Will be set to 'Y' when appointment is created
+        Booked_status='Not Booked'  # Will be set to 'Y' when appointment is created
     )
     
     db.add(new_slot)
@@ -474,7 +474,7 @@ def create_appointment(
         # Mark the slot as booked
         booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == dcid).first()
         if booked_slot:
-            booked_slot.Booked_status = 'Y'
+            booked_slot.Booked_status = 'Booked'
         
         db.commit()
         db.refresh(new_appt)
@@ -532,14 +532,16 @@ def create_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error creating appointment: {str(e)}")
-
-
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
     facility_id: int = Query(..., alias="FacilityID"),
     db: Session = Depends(get_db)
 ):
+    """
+    This version requires database schema change to allow TokenID uniqueness 
+    per facility per day instead of global uniqueness
+    """
     # Find the appointment
     appt = (
         db.query(Appointment)
@@ -566,19 +568,41 @@ def checkin_appointment(
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         prefix = "A" if mode == "a" else "W" if mode == "w" else "X"
 
-        # Count existing tokens with the same mode checked in TODAY only
+        # Count existing tokens with the same prefix checked in TODAY at THIS FACILITY
         today = date.today()
         count = (
             db.query(func.count(Appointment.AppointmentID))
             .filter(
-                Appointment.AppointmentMode.ilike(mode),
-                Appointment.TokenID.isnot(None),  # Only count appointments that have been checked in
-                func.date(Appointment.CheckinTime) == today  # Only count today's check-ins
+                Appointment.FacilityID == facility_id,
+                Appointment.TokenID.like(f"{prefix}%"),
+                Appointment.TokenID.isnot(None),
+                func.date(Appointment.CheckinTime) == today
             )
             .scalar() or 0
         )
 
+        # Generate simple token
         token_id = f"{prefix}{count + 1}"
+        
+        # Handle race conditions
+        max_retries = 5
+        for attempt in range(max_retries):
+            test_token = f"{prefix}{count + 1 + attempt}"
+            
+            # Check if this token exists today at this facility
+            existing = (
+                db.query(Appointment)
+                .filter(
+                    Appointment.TokenID == test_token,
+                    Appointment.FacilityID == facility_id,
+                    func.date(Appointment.CheckinTime) == today
+                )
+                .first()
+            )
+            
+            if not existing:
+                token_id = test_token
+                break
         
         checkin_time = datetime.now()
 
@@ -601,8 +625,6 @@ def checkin_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
-
-
 @router.post("/{appointment_id}/cancel", response_model=CancelResponse)
 def cancel_appointment(
     appointment_id: int,
@@ -796,12 +818,12 @@ def update_appointment(
             if old_dcid:
                 old_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == old_dcid).first()
                 if old_slot:
-                    old_slot.Booked_status = 'N'
+                    old_slot.Booked_status = 'Not Booked'
             
             # Book new slot
             new_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == filtered_data['DCID']).first()
             if new_slot:
-                new_slot.Booked_status = 'Y'
+                new_slot.Booked_status = 'Booked'
 
         db.commit()
         db.refresh(appt)
@@ -863,7 +885,6 @@ def update_appointment(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-
 @router.delete("/{appointment_id}")
 def delete_appointment(
     appointment_id: int,
@@ -886,7 +907,7 @@ def delete_appointment(
         if appt.DCID:
             booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == appt.DCID).first()
             if booked_slot:
-                booked_slot.Booked_status = 'N'
+                booked_slot.Booked_status = 'Not Booked'  # Changed from 'N' to 'Not Booked'
         
         db.delete(appt)
         db.commit()

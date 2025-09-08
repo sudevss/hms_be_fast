@@ -142,40 +142,41 @@ class DoctorBookedSlots(Base):
 
 class Appointment(Base):
     __tablename__ = "appointment"
-    
+
     AppointmentID = Column(Integer, primary_key=True, index=True, autoincrement=True)
     PatientID = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     DoctorID = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False, index=True)
     DCID = Column(Integer, ForeignKey("doctor_booked_slots.DCID"), nullable=False, index=True)
-    
+
     payment_method = Column(String(50), default="Cash")
     AppointmentDate = Column(Date, nullable=False, index=True)
     AppointmentTime = Column(Time, nullable=False)
     Reason = Column(String(200), nullable=False)
     CheckinTime = Column(DateTime)
     Cancelled = Column(Boolean, nullable=False, default=False)
-    TokenID = Column(String(20), unique=True)
+    TokenID = Column(String(20))  # no more unique=True
     AppointmentMode = Column(String(50), nullable=False)
     AppointmentStatus = Column(String(50), nullable=False, default="Scheduled")
-    
+
     # Relationships
     patient = relationship("Patients", back_populates="appointments")
     doctor = relationship("Doctors", back_populates="appointments")
     facility = relationship("Facility", back_populates="appointments")
     booked_slot = relationship("DoctorBookedSlots", back_populates="appointments")
-    
+
     _table_args_ = (
-        CheckConstraint("AppointmentMode IN ('a','A','w','W')", name='check_appointment_mode'),
-        CheckConstraint("AppointmentStatus IN ('Scheduled','Completed','Cancelled')", 
-                        name='check_appointment_status'),
+        CheckConstraint("AppointmentMode IN ('a','A','w','W')", name="check_appointment_mode"),
+        CheckConstraint("AppointmentStatus IN ('Scheduled','Completed','Cancelled')",
+                        name="check_appointment_status"),
         CheckConstraint(
-            "payment_method IN ('Cash','Debit Card','Credit Card','UPI','Net Banking')", 
-            name='check_payment_method'
+            "payment_method IN ('Cash','Debit Card','Credit Card','UPI','Net Banking')",
+            name="check_payment_method"
         ),
-        Index('idx_patient_date', 'PatientID', 'AppointmentDate'),
-        Index('idx_doctor_date', 'DoctorID', 'AppointmentDate'),
-        Index('idx_facility_date', 'FacilityID', 'AppointmentDate'),
+        Index("idx_patient_date", "PatientID", "AppointmentDate"),
+        Index("idx_doctor_date", "DoctorID", "AppointmentDate"),
+        Index("idx_facility_date", "FacilityID", "AppointmentDate"),
+        UniqueConstraint("TokenID", "FacilityID", "AppointmentDate", name="uq_token_facility_date"),
     )
 
 class MedicalRecord(Base):
