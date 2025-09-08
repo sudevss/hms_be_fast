@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import jwt
 import secrets
+import hashlib
 
 from database import get_db
 from model import UserMaster, Facility
@@ -25,8 +26,8 @@ security = HTTPBearer()
 
 # Pydantic models
 class LoginRequest(BaseModel):
-    user_id: int
-    facility_id: int
+    user_id: str  # Changed from username to user_id to match the UI
+    password: str
 
 class UserDetails(BaseModel):
     UserID: int
@@ -52,6 +53,7 @@ class LoginResponse(BaseModel):
     expires_in: int
     user_details: UserDetails
     facility_details: FacilityDetails
+    message: str  # Added welcome message
 
 class TokenData(BaseModel):
     user_id: Optional[int] = None
@@ -65,6 +67,20 @@ class CurrentUser:
         self.facility_id = facility_id
 
 # Utility functions
+def hash_password(password: str) -> str:
+    """Hash password using SHA-256 (replace with bcrypt in production)"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(plain_password: str, stored_password: str) -> bool:
+    """Verify password against hash or plain text (for transition period)"""
+    # Check if password is already hashed (64 characters for SHA-256)
+    if len(stored_password) == 64 and all(c in '0123456789abcdef' for c in stored_password.lower()):
+        # Compare with hashed version
+        return hash_password(plain_password) == stored_password
+    else:
+        # Compare plain text (for backward compatibility)
+        return plain_password == stored_password
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     to_encode = data.copy()
@@ -91,22 +107,52 @@ def verify_token(token: str):
     except jwt.PyJWTError:
         return None
 
-def authenticate_user(db: Session, user_id: int, facility_id: int):
-    """Authenticate user by user_id and facility_id"""
+def authenticate_user(db: Session, user_id: str, password: str):
+    """Authenticate user by User ID and password"""
+    # Strip whitespace
+    user_id = user_id.strip()
+    password = password.strip()
+    
+    print(f"DEBUG: Attempting to authenticate user_id: '{user_id}'")
+    
+    # Try to find user by UserName (which seems to store the User ID based on your image)
     user = db.query(UserMaster).filter(
-        UserMaster.UserID == user_id,
-        UserMaster.FacilityID == facility_id
+        UserMaster.UserName == user_id
     ).first()
     
+    # If not found, try case-insensitive match
     if not user:
+        user = db.query(UserMaster).filter(
+            UserMaster.UserName.ilike(user_id)
+        ).first()
+    
+    # Alternative: If UserName doesn't match User ID format, try by UserID field
+    if not user and user_id.isdigit():
+        user = db.query(UserMaster).filter(
+            UserMaster.UserID == int(user_id)
+        ).first()
+    
+    if not user:
+        print(f"DEBUG: User with ID '{user_id}' not found in database")
         return None
+    
+    print(f"DEBUG: Found user '{user.UserName}' (ID: {user.UserID}) with password '{user.Password}'")
+    print(f"DEBUG: Comparing with input password '{password}'")
+    
+    # Verify password
+    if not verify_password(password, user.Password):
+        print(f"DEBUG: Password verification failed")
+        return None
+    
+    print(f"DEBUG: Password verification successful")
     
     # Get facility details
     facility = db.query(Facility).filter(
-        Facility.FacilityID == facility_id
+        Facility.FacilityID == user.FacilityID
     ).first()
     
     if not facility:
+        print(f"DEBUG: Facility with ID {user.FacilityID} not found")
         return None
     
     return user, facility
@@ -158,16 +204,29 @@ def get_current_user(
 @router.post("/login", response_model=LoginResponse)
 def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     """
-    Login endpoint that authenticates user with user_id and facility_id
-    Returns JWT token and user/facility details
+    HMS Login endpoint that authenticates user with User ID and password
+    Returns JWT token and user/facility details with welcome message
     """
+    # Validate input
+    if not login_data.user_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID is required"
+        )
+    
+    if not login_data.password.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is required"
+        )
+    
     # Authenticate user
-    auth_result = authenticate_user(db, login_data.user_id, login_data.facility_id)
+    auth_result = authenticate_user(db, login_data.user_id, login_data.password)
     
     if not auth_result:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user ID or facility ID combination",
+            detail="Invalid User ID or Password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -185,6 +244,9 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         expires_delta=access_token_expires
     )
     
+    # Create welcome message
+    welcome_message = f"Welcome to HMS, {user.UserName}! ({user.Role})"
+    
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -200,121 +262,46 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             FacilityName=facility.FacilityName,
             FacilityAddress=facility.FacilityAddress,
             TaxNumber=facility.TaxNumber
-        )
+        ),
+        message=welcome_message
     )
 
-@router.get("/verify-token")
-def verify_user_token(token: str, db: Session = Depends(get_db)):
-    """
-    Verify if the provided token is valid and return user info
-    """
-    token_data = verify_token(token)
+# @router.get("/me")
+# def get_current_user_info(current_user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+#     """
+#     Get current authenticated user's information
+#     """
+#     # Get fresh user and facility details from database
+#     user = db.query(UserMaster).filter(UserMaster.UserID == current_user.user_id).first()
+#     facility = db.query(Facility).filter(Facility.FacilityID == current_user.facility_id).first()
     
-    if token_data is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+#     if not user or not facility:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED,
+#             detail="User or facility no longer exists",
+#         )
     
-    # Get user and facility details
-    auth_result = authenticate_user(db, token_data.user_id, token_data.facility_id)
-    
-    if not auth_result:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User or facility no longer exists",
-        )
-    
-    user, facility = auth_result
-    
-    return {
-        "valid": True,
-        "user_details": UserDetails(
-            UserID=user.UserID,
-            UserName=user.UserName,
-            Role=user.Role,
-            FacilityID=user.FacilityID
-        ),
-        "facility_details": FacilityDetails(
-            FacilityID=facility.FacilityID,
-            FacilityName=facility.FacilityName,
-            FacilityAddress=facility.FacilityAddress,
-            TaxNumber=facility.TaxNumber
-        )
-    }
+#     return {
+#         "user_details": UserDetails(
+#             UserID=user.UserID,
+#             UserName=user.UserName,
+#             Role=user.Role,
+#             FacilityID=user.FacilityID
+#         ),
+#         "facility_details": FacilityDetails(
+#             FacilityID=facility.FacilityID,
+#             FacilityName=facility.FacilityName,
+#             FacilityAddress=facility.FacilityAddress,
+#             TaxNumber=facility.TaxNumber
+#         )
+#     }
 
-@router.post("/refresh-token")
-def refresh_token(current_token: str, db: Session = Depends(get_db)):
-    """
-    Refresh the access token
-    """
-    token_data = verify_token(current_token)
-    
-    if token_data is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Verify user still exists
-    auth_result = authenticate_user(db, token_data.user_id, token_data.facility_id)
-    
-    if not auth_result:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User or facility no longer exists",
-        )
-    
-    user, facility = auth_result
-    
-    # Create new access token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    new_access_token = create_access_token(
-        data={
-            "user_id": user.UserID,
-            "facility_id": user.FacilityID,
-            "role": user.Role,
-            "username": user.UserName
-        },
-        expires_delta=access_token_expires
-    )
-    
-    return {
-        "access_token": new_access_token,
-        "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    }
-
-@router.get("/me")
-def get_current_user_info(current_user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Get current authenticated user's information
-    """
-    # Get fresh user and facility details from database
-    auth_result = authenticate_user(db, current_user.user_id, current_user.facility_id)
-    
-    if not auth_result:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User or facility no longer exists",
-        )
-    
-    user, facility = auth_result
-    
-    return {
-        "user_details": UserDetails(
-            UserID=user.UserID,
-            UserName=user.UserName,
-            Role=user.Role,
-            FacilityID=user.FacilityID
-        ),
-        "facility_details": FacilityDetails(
-            FacilityID=facility.FacilityID,
-            FacilityName=facility.FacilityName,
-            FacilityAddress=facility.FacilityAddress,
-            TaxNumber=facility.TaxNumber
-            
-        )
-    }
+# @router.post("/logout")
+# def logout(current_user: CurrentUser = Depends(get_current_user)):
+#     """
+#     Logout endpoint (client should discard the token)
+#     """
+#     return {
+#         "success": True,
+#         "message": f"Successfully logged out. Goodbye, {current_user.username}!"
+#     }

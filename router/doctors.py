@@ -1,5 +1,6 @@
 from typing import List, Optional
 from decimal import Decimal
+from datetime import date
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
@@ -33,9 +34,12 @@ class ui_Doctors(BaseModel):
     phone_number: Optional[str] = None
     email: Optional[str] = None
     consultation_fee: Optional[Decimal] = None
-
     ABDM_NHPR_id: Optional[str] = None
     FacilityID: Optional[int] = None
+    gender: Optional[str] = None
+    age: Optional[int] = None
+    experience: Optional[int] = None
+    is_active: Optional[bool] = True
 
     class Config:
         schema_extra = {
@@ -48,6 +52,10 @@ class ui_Doctors(BaseModel):
                 "consultation_fee": 500.00,
                 "ABDM_NHPR_id": "ABDM123456",
                 "FacilityID": 1,
+                "gender": "Male",
+                "age": 35,
+                "experience": 10,
+                "is_active": True
             }
         }
 
@@ -60,6 +68,10 @@ class ui_DoctorsUpdate(BaseModel):
     consultation_fee: Optional[Decimal] = None
     ABDM_NHPR_id: Optional[str] = None
     FacilityID: Optional[int] = None
+    gender: Optional[str] = None
+    age: Optional[int] = None
+    experience: Optional[int] = None
+    is_active: Optional[bool] = None
     
     class Config:
         schema_extra = {
@@ -72,14 +84,19 @@ class ui_DoctorsUpdate(BaseModel):
                 "consultation_fee": 500.00,
                 "ABDM_NHPR_id": "ABDM123456",
                 "FacilityID": 1,
+                "gender": "Male",
+                "age": 35,
+                "experience": 10,
+                "is_active": True
             }
         }
 
 class schedule_response(BaseModel):
     schedule: str  # e.g., "Mon-Fri" or "Monday, Wednesday"
     consultation_time: str  # e.g., "9:00 AM - 4:00 PM"
-    slot_per_hour: Optional[int] = None
-    appointments_per_slot: Optional[int] = None  # from AppointmentsPerSlot
+    window_num: Optional[int] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
 
     class Config:
         from_attributes = True
@@ -98,6 +115,10 @@ class doctor_response(BaseModel):
     email: Optional[str] = None
     specialization: str
     consultation_fee: Optional[Decimal] = None
+    gender: Optional[str] = None
+    age: Optional[int] = None
+    experience: Optional[int] = None
+    is_active: bool
     schedules: List[schedule_response] = []
 
     class Config:
@@ -112,6 +133,10 @@ class doctor_schema_with_schedule(BaseModel):
     consultation_fee: Optional[Decimal] = None
     ABDM_NHPR_id: Optional[str] = None
     FacilityID: Optional[int] = None
+    gender: Optional[str] = None
+    age: Optional[int] = None
+    experience: Optional[int] = None
+    is_active: bool
     schedules: List[schedule_response] = []
     facility: Optional[facility_response] = None
 
@@ -139,58 +164,50 @@ def combine_doctor_name(firstname: str, lastname: str) -> str:
     else:
         return "Dr. Unknown"
 
-def get_schedule_details(schedule):
-    """Extract slot duration and slots per hour from schedule"""
-    slot_duration = None
-    slot_per_hour = None
-    
-    # Get slot duration from Slotsize (which is in minutes as string)
-    if hasattr(schedule, 'Slotsize') and schedule.Slotsize:
-        try:
-            slot_duration = int(schedule.Slotsize)  # Convert string to int
-            # Calculate slots per hour based on slot duration
-            slot_per_hour = 60 // slot_duration if slot_duration > 0 else None
-        except (ValueError, TypeError):
-            slot_duration = None
-            slot_per_hour = None
-    
-    return slot_duration, slot_per_hour
-
-def format_time_to_12hour(time_str):
-    """Convert 24-hour format to 12-hour format with AM/PM"""
+def format_time_to_12hour(time_obj):
+    """Convert time object to 12-hour format with AM/PM"""
     try:
         from datetime import datetime
-        time_obj = datetime.strptime(time_str, "%H:%M")
-        return time_obj.strftime("%I:%M %p").lstrip('0')
+        if hasattr(time_obj, 'hour') and hasattr(time_obj, 'minute'):
+            # It's already a time object
+            time_str = f"{time_obj.hour:02d}:{time_obj.minute:02d}"
+        else:
+            # It's a string, convert it
+            time_str = str(time_obj)
+        
+        time_dt = datetime.strptime(time_str, "%H:%M")
+        return time_dt.strftime("%I:%M %p").lstrip('0')
     except:
-        return time_str
+        return str(time_obj)
 
 def format_consultation_time(start_time, end_time):
     """Format consultation time as '9:00 AM - 4:00 PM'"""
-    start_formatted = format_time_to_12hour(str(start_time))
-    end_formatted = format_time_to_12hour(str(end_time))
+    start_formatted = format_time_to_12hour(start_time)
+    end_formatted = format_time_to_12hour(end_time)
     return f"{start_formatted} - {end_formatted}"
 
 def group_schedules_by_time(schedules):
-    """Group schedules by consultation time and format days"""
+    """Group schedules by consultation time and format days for new schema"""
     grouped = {}
     
     for schedule in schedules:
-        consultation_time = format_consultation_time(schedule.StartTime, schedule.EndTime)
-        slot_duration, slot_per_hour = get_schedule_details(schedule)
-        appointments_per_slot = getattr(schedule, 'AppointmentsPerSlot', None)
+        consultation_time = format_consultation_time(schedule.Slot_Start_Time, schedule.Slot_End_Time)
+        window_num = getattr(schedule, 'Window_Num', None)
+        start_date = getattr(schedule, 'Start_Date', None)
+        end_date = getattr(schedule, 'End_Date', None)
         
-        key = f"{consultation_time}_{slot_per_hour}_{appointments_per_slot}"
+        key = f"{consultation_time}_{window_num}_{start_date}_{end_date}"
         
         if key not in grouped:
             grouped[key] = {
                 'consultation_time': consultation_time,
-                'slot_per_hour': slot_per_hour,
-                'appointments_per_slot': appointments_per_slot,
+                'window_num': window_num,
+                'start_date': start_date,
+                'end_date': end_date,
                 'days': []
             }
         
-        grouped[key]['days'].append(schedule.DayOfWeek)
+        grouped[key]['days'].append(schedule.WeekDay)
     
     # Format the grouped schedules
     result = []
@@ -204,7 +221,7 @@ def group_schedules_by_time(schedules):
             'Thursday': 'Thu', 'Friday': 'Fri', 'Saturday': 'Sat', 'Sunday': 'Sun'
         }
         
-        sorted_days = sorted(days, key=lambda x: day_order.index(x) if x in day_order else 999)
+        sorted_days = sorted(set(days), key=lambda x: day_order.index(x) if x in day_order else 999)
         
         # Format days (e.g., "Mon-Fri" for consecutive days, "Mon, Wed, Fri" for non-consecutive)
         if len(sorted_days) == 5 and all(day in sorted_days for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']):
@@ -220,19 +237,39 @@ def group_schedules_by_time(schedules):
         result.append(schedule_response(
             schedule=schedule_str,
             consultation_time=group_data['consultation_time'],
-            slot_per_hour=group_data['slot_per_hour'],
-            appointments_per_slot=group_data['appointments_per_slot']
+            window_num=group_data['window_num'],
+            start_date=group_data['start_date'],
+            end_date=group_data['end_date']
         ))
     
     return result
 
 # API Routes
 @router.get("/", tags=["doctors"], response_model=List[doctor_response])
-async def get_all_doctors(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
+async def get_all_doctors(
+    facility_id: Optional[int] = None, 
+    include_inactive: Optional[bool] = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all doctors with soft delete filtering
+    - By default, only returns active and non-deleted doctors
+    - Set include_inactive=true to include inactive doctors
+    - Deleted doctors are never returned
+    """
     try:
-        query = db.query(model.Doctors).options(joinedload(model.Doctors.schedules))
+        query = db.query(model.Doctors).options(joinedload(model.Doctors.doctor_schedules))
+        
+        # Always filter out soft deleted doctors
+        query = query.filter(model.Doctors.is_deleted == False)
+        
+        # Filter by active status unless explicitly requested to include inactive
+        if not include_inactive:
+            query = query.filter(model.Doctors.is_active == True)
+            
         if facility_id is not None:
             query = query.filter(model.Doctors.FacilityID == facility_id)
+            
         doctors = query.all()
 
         if not doctors:
@@ -240,8 +277,8 @@ async def get_all_doctors(facility_id: Optional[int] = None, db: Session = Depen
 
         result = []
         for doctor in doctors:
-            # Group and format schedules
-            schedules = group_schedules_by_time(getattr(doctor, 'schedules', []))
+            # Group and format schedules using new relationship
+            schedules = group_schedules_by_time(getattr(doctor, 'doctor_schedules', []))
 
             result.append(doctor_response(
                 id=doctor.id,
@@ -250,6 +287,10 @@ async def get_all_doctors(facility_id: Optional[int] = None, db: Session = Depen
                 email=getattr(doctor, 'email', None),
                 specialization=doctor.specialization,
                 consultation_fee=getattr(doctor, 'consultation_fee', None),
+                gender=getattr(doctor, 'gender', None),
+                age=getattr(doctor, 'age', None),
+                experience=getattr(doctor, 'experience', None),
+                is_active=doctor.is_active,
                 schedules=schedules
             ))
         return result
@@ -260,11 +301,13 @@ async def get_all_doctors(facility_id: Optional[int] = None, db: Session = Depen
 
 @router.get("/{doctor_id}", tags=["doctors"], response_model=doctor_schema_with_schedule)
 async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
+    """Get doctor by ID (only if not soft deleted)"""
     try:
         doctor = (
             db.query(model.Doctors)
             .filter(model.Doctors.id == doctor_id)
-            .options(joinedload(model.Doctors.schedules), joinedload(model.Doctors.facility))
+            .filter(model.Doctors.is_deleted == False)  # Filter out soft deleted doctors
+            .options(joinedload(model.Doctors.doctor_schedules), joinedload(model.Doctors.facility))
             .first()
         )
 
@@ -290,8 +333,8 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
                                 "Unknown Facility"
                 facility_info = facility_response(FacilityID=facility.FacilityID, name=facility_name)
 
-        # Group and format schedules
-        schedules = group_schedules_by_time(doctor.schedules)
+        # Group and format schedules using new relationship
+        schedules = group_schedules_by_time(doctor.doctor_schedules)
 
         return doctor_schema_with_schedule(
             id=doctor.id,
@@ -302,6 +345,10 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
             consultation_fee=getattr(doctor, 'consultation_fee', None),
             ABDM_NHPR_id=doctor.ABDM_NHPR_id,
             FacilityID=doctor.FacilityID,
+            gender=getattr(doctor, 'gender', None),
+            age=getattr(doctor, 'age', None),
+            experience=getattr(doctor, 'experience', None),
+            is_active=doctor.is_active,
             schedules=schedules,
             facility=facility_info
         )
@@ -332,6 +379,11 @@ async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db), adm:
         doctor_model.consultation_fee = doctor.consultation_fee
         doctor_model.ABDM_NHPR_id = doctor.ABDM_NHPR_id
         doctor_model.FacilityID = doctor.FacilityID
+        doctor_model.gender = doctor.gender
+        doctor_model.age = doctor.age
+        doctor_model.experience = doctor.experience
+        doctor_model.is_active = doctor.is_active if doctor.is_active is not None else True
+        doctor_model.is_deleted = False  # Always set to False for new doctors
 
         db.add(doctor_model)
         db.commit()
@@ -343,6 +395,7 @@ async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db), adm:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error adding doctor: {str(e)}")
+
 @router.api_route("/{doctor_id}", methods=["PUT"], tags=["doctors"], response_model=doctor_response)
 async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dict = Depends(get_current_user),
                               db: Session = Depends(get_db)):
@@ -350,7 +403,11 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dic
         if not adm:
             raise get_user_exception()
 
-        existing_doctor = db.query(model.Doctors).filter(model.Doctors.id == doctor_id).first()
+        existing_doctor = db.query(model.Doctors).filter(
+            model.Doctors.id == doctor_id,
+            model.Doctors.is_deleted == False  # Only allow updates for non-deleted doctors
+        ).first()
+        
         if not existing_doctor:
             raise get_postnotfound_exception()
 
@@ -363,11 +420,16 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dic
                 if value.strip() and value != "string":
                     filtered_data[key] = value
             elif isinstance(value, (int, float, Decimal)):
-                # ✅ Skip updating consultation_fee to 0 accidentally
+                # ✅ Skip updating consultation_fee and age to 0 accidentally
                 if key == "consultation_fee" and float(value) == 0.0:
                     continue
-                filtered_data[key] = value
-            elif value is not None:
+                elif key == "age" and int(value) == 0:
+                    continue
+                elif key == "experience" and int(value) == 0:
+                    continue
+                else:
+                    filtered_data[key] = value
+            elif isinstance(value, bool) or value is not None:
                 filtered_data[key] = value
 
         if not filtered_data:
@@ -394,8 +456,9 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dic
         db.commit()
         db.refresh(existing_doctor)
 
+        # Updated to use new table name and column names
         doctor_schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.DoctorID == existing_doctor.id
+            model.DoctorSchedule.Doctor_id == existing_doctor.id
         ).all()
 
         schedules = group_schedules_by_time(doctor_schedules)
@@ -407,6 +470,10 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dic
             email=getattr(existing_doctor, 'email', None),
             specialization=existing_doctor.specialization,
             consultation_fee=existing_doctor.consultation_fee,
+            gender=getattr(existing_doctor, 'gender', None),
+            age=getattr(existing_doctor, 'age', None),
+            experience=getattr(existing_doctor, 'experience', None),
+            is_active=existing_doctor.is_active,
             schedules=schedules
         )
 
@@ -415,21 +482,25 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dic
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error updating doctor: {str(e)}")
 
-
-
-
-
 @router.delete("/{doctor_id}", tags=["doctors"])
 async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
+    """Soft delete doctor by setting is_deleted=True"""
     try:
         if not adm:
             raise get_user_exception()
 
-        req_doc = db.query(model.Doctors).filter(model.Doctors.id == doctor_id).first()
+        req_doc = db.query(model.Doctors).filter(
+            model.Doctors.id == doctor_id,
+            model.Doctors.is_deleted == False  # Only allow deletion of non-deleted doctors
+        ).first()
+        
         if not req_doc:
             raise get_postnotfound_exception()
 
-        db.query(model.Doctors).filter(model.Doctors.id == doctor_id).delete()
+        # Soft delete: set is_deleted=True instead of actually deleting
+        req_doc.is_deleted = True
+        req_doc.is_active = False  # Also set inactive when deleted
+        
         db.commit()
         return successful_response(200)
 
@@ -437,3 +508,56 @@ async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db), a
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting doctor: {str(e)}")
+
+# # Additional endpoint for hard delete (if needed for admin purposes)
+# @router.delete("/{doctor_id}/permanent", tags=["doctors"])
+# async def permanently_delete_doctor(doctor_id: int, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
+#     """Permanently delete doctor and all associated records (hard delete)"""
+#     try:
+#         if not adm:
+#             raise get_user_exception()
+
+#         req_doc = db.query(model.Doctors).filter(model.Doctors.id == doctor_id).first()
+#         if not req_doc:
+#             raise get_postnotfound_exception()
+
+#         # Delete associated schedules and booked slots first due to foreign key constraints
+#         db.query(model.DoctorSchedule).filter(model.DoctorSchedule.Doctor_id == doctor_id).delete()
+#         db.query(model.DoctorBookedSlots).filter(model.DoctorBookedSlots.Doctor_id == doctor_id).delete()
+        
+#         # Then delete the doctor
+#         db.query(model.Doctors).filter(model.Doctors.id == doctor_id).delete()
+#         db.commit()
+#         return successful_response(200)
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Error permanently deleting doctor: {str(e)}")
+
+# Additional endpoint to restore soft deleted doctor
+@router.patch("/{doctor_id}/restore", tags=["doctors"])
+async def restore_doctor(doctor_id: int, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
+    """Restore a soft deleted doctor"""
+    try:
+        if not adm:
+            raise get_user_exception()
+
+        doctor = db.query(model.Doctors).filter(
+            model.Doctors.id == doctor_id,
+            model.Doctors.is_deleted == True  # Only restore deleted doctors
+        ).first()
+        
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Deleted doctor not found")
+
+        doctor.is_deleted = False
+        doctor.is_active = True  # Restore as active
+        
+        db.commit()
+        return successful_response(200)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error restoring doctor: {str(e)}")

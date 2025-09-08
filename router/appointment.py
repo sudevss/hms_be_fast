@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
+from sqlalchemy import func, extract, and_
 from typing import List, Optional
 from datetime import date, datetime, time
 from pydantic import BaseModel, validator
-from model import Appointment, DoctorCalendar, Patients, Doctors
-
+from model import Appointment, Patients, Doctors, DoctorSchedule, DoctorBookedSlots
 
 from database import get_db
-from model import Appointment, DoctorCalendar
+from  router.new_booking import update_slot_booking_status   # ✅ import the slot updater
 
 router = APIRouter(
     prefix="/appointments",
@@ -21,7 +20,6 @@ class AppointmentCreate(BaseModel):
     PatientID: int
     DoctorID: int
     FacilityID: int
-    DCID: int
     AppointmentDate: date
     AppointmentTime: time
     Reason: str
@@ -50,7 +48,6 @@ class AppointmentCreate(BaseModel):
 
 class AppointmentUpdate(BaseModel):
     DoctorID: Optional[int] = None
-    DCID: Optional[int] = None
     AppointmentDate: Optional[date] = None
     AppointmentTime: Optional[time] = None
     Reason: Optional[str] = None
@@ -170,7 +167,6 @@ class AppointmentResponse(BaseModel):
         from_attributes = True
 
 
-
 class CheckinResponse(BaseModel):
     AppointmentID: int
     TokenID: str
@@ -208,6 +204,91 @@ class AppointmentSummary(BaseModel):
 class AppointmentDetailsResponse(BaseModel):
     hourly: List[HourlyData]
     summary: AppointmentSummary
+
+# -------------------- Helper Functions --------------------
+
+def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointment_date: date, appointment_time: time):
+    """
+    Find an available DCID from doctor_booked_slots for the given doctor, facility, date and time.
+    Creates a new slot if none exists, or finds an unbooked slot.
+    """
+    # First check if there's an existing unbooked slot for this time
+    available_slot = (
+        db.query(DoctorBookedSlots)
+        .filter(
+            DoctorBookedSlots.Doctor_id == doctor_id,
+            DoctorBookedSlots.Facility_id == facility_id,
+            DoctorBookedSlots.Slot_date == appointment_date,
+            DoctorBookedSlots.Start_Time <= appointment_time,
+            DoctorBookedSlots.End_Time > appointment_time,
+            DoctorBookedSlots.Booked_status == 'N'
+        )
+        .first()
+    )
+    
+    if available_slot:
+        return available_slot.DCID
+    
+    # If no available slot, check if doctor has schedule for this time
+    weekday = appointment_date.strftime('%A')  # Get day name (Monday, Tuesday, etc.)
+    
+    schedule = (
+        db.query(DoctorSchedule)
+        .filter(
+            DoctorSchedule.Doctor_id == doctor_id,
+            DoctorSchedule.Facility_id == facility_id,
+            DoctorSchedule.Start_Date <= appointment_date,
+            DoctorSchedule.End_Date >= appointment_date,
+            DoctorSchedule.WeekDay == weekday,
+            DoctorSchedule.Slot_Start_Time <= appointment_time,
+            DoctorSchedule.Slot_End_Time > appointment_time
+        )
+        .first()
+    )
+    
+    if not schedule:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Doctor is not available at {appointment_time} on {weekday}s"
+        )
+    
+    # Create a new booked slot
+    new_slot = DoctorBookedSlots(
+        Doctor_id=doctor_id,
+        Facility_id=facility_id,
+        Slot_date=appointment_date,
+        Start_Time=schedule.Slot_Start_Time,
+        End_Time=schedule.Slot_End_Time,
+        Booked_status='N'  # Will be set to 'Y' when appointment is created
+    )
+    
+    db.add(new_slot)
+    db.flush()  # Get the DCID without committing
+    
+    return new_slot.DCID
+
+
+def validate_doctor_availability(db: Session, doctor_id: int, facility_id: int, appointment_date: date, appointment_time: time):
+    """
+    Validate if doctor is available at the requested time based on their schedule.
+    """
+    weekday = appointment_date.strftime('%A')
+    
+    schedule = (
+        db.query(DoctorSchedule)
+        .filter(
+            DoctorSchedule.Doctor_id == doctor_id,
+            DoctorSchedule.Facility_id == facility_id,
+            DoctorSchedule.Start_Date <= appointment_date,
+            DoctorSchedule.End_Date >= appointment_date,
+            DoctorSchedule.WeekDay == weekday,
+            DoctorSchedule.Slot_Start_Time <= appointment_time,
+            DoctorSchedule.Slot_End_Time > appointment_time
+        )
+        .first()
+    )
+    
+    return schedule is not None
 
 # -------------------- CRUD Endpoints --------------------
 
@@ -344,6 +425,19 @@ def create_appointment(
     if "AppointmentStatus" not in payload:
         payload["AppointmentStatus"] = "Scheduled"
 
+    # Validate doctor availability using new schedule system
+    if not validate_doctor_availability(
+        db, 
+        payload["DoctorID"], 
+        payload["FacilityID"], 
+        payload["AppointmentDate"], 
+        payload["AppointmentTime"]
+    ):
+        raise HTTPException(
+            status_code=400, 
+            detail="Doctor is not available at the requested time"
+        )
+
     # Check for duplicate appointments
     exists = (
         db.query(Appointment)
@@ -359,13 +453,29 @@ def create_appointment(
     if exists:
         raise HTTPException(400, "Duplicate appointment exists")
 
-    # TokenID and CheckinTime will be generated during checkin, not during creation
-    payload["TokenID"] = None
-    payload["CheckinTime"] = None
-
     try:
+        # Get or create DCID from the new booked slots system
+        dcid = get_available_dcid(
+            db, 
+            payload["DoctorID"], 
+            payload["FacilityID"], 
+            payload["AppointmentDate"], 
+            payload["AppointmentTime"]
+        )
+        payload["DCID"] = dcid
+
+        # TokenID and CheckinTime will be generated during checkin, not during creation
+        payload["TokenID"] = None
+        payload["CheckinTime"] = None
+
         new_appt = Appointment(**payload)
         db.add(new_appt)
+        
+        # Mark the slot as booked
+        booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == dcid).first()
+        if booked_slot:
+            booked_slot.Booked_status = 'Y'
+        
         db.commit()
         db.refresh(new_appt)
         
@@ -422,6 +532,8 @@ def create_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error creating appointment: {str(e)}")
+
+
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
@@ -468,17 +580,7 @@ def checkin_appointment(
 
         token_id = f"{prefix}{count + 1}"
         
-        # SOLUTION 1: Use current datetime without modification for accurate time
         checkin_time = datetime.now()
-        
-        # SOLUTION 2: If you need to use UTC time, uncomment the line below:
-        # from datetime import timezone
-        # checkin_time = datetime.now(timezone.utc)
-        
-        # SOLUTION 3: If you need to use a specific timezone (e.g., Indian timezone):
-        # import pytz
-        # indian_tz = pytz.timezone('Asia/Kolkata')
-        # checkin_time = datetime.now(indian_tz)
 
         # Update appointment with checkin details
         appt.TokenID = token_id
@@ -500,6 +602,7 @@ def checkin_appointment(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
 
+
 @router.post("/{appointment_id}/cancel", response_model=CancelResponse)
 def cancel_appointment(
     appointment_id: int,
@@ -508,7 +611,8 @@ def cancel_appointment(
     db: Session = Depends(get_db)
 ):
     """
-    Cancel an appointment by setting Cancelled=True and updating status
+    Cancel an appointment by setting Cancelled=True and updating status.
+    Also frees up the booked slot.
     """
     # Find the appointment
     appt = (
@@ -519,14 +623,14 @@ def cancel_appointment(
         )
         .first()
     )
-    
+
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    
+
     # Check if already cancelled
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Appointment is already cancelled")
-    
+
     # Check if already checked in
     if appt.CheckinTime is not None:
         raise HTTPException(status_code=400, detail="Cannot cancel checked-in appointment")
@@ -535,7 +639,13 @@ def cancel_appointment(
         # Update appointment to cancelled status
         appt.Cancelled = True
         appt.AppointmentStatus = "Cancelled"
-        
+
+        # Free up the booked slot
+        if appt.DCID:
+            success, error = update_slot_booking_status(db, appt.DCID, status="Not Booked")
+            if not success:
+                raise HTTPException(status_code=500, detail=f"Failed to free slot: {error}")
+
         # Optionally store cancellation reason if your model supports it
         # appt.CancellationReason = cancel_request.reason
 
@@ -655,11 +765,44 @@ def update_appointment(
     if not filtered_data:
         raise HTTPException(status_code=400, detail="No valid fields provided for update")
 
+    # Handle doctor/time/date changes - need to update DCID and slot booking
+    needs_slot_update = any(k in filtered_data for k in ['DoctorID', 'AppointmentDate', 'AppointmentTime'])
+    old_dcid = appt.DCID if needs_slot_update else None
+
+    # Validate new doctor availability if doctor/time/date is being changed
+    if needs_slot_update:
+        new_doctor_id = filtered_data.get('DoctorID', appt.DoctorID)
+        new_date = filtered_data.get('AppointmentDate', appt.AppointmentDate)
+        new_time = filtered_data.get('AppointmentTime', appt.AppointmentTime)
+        
+        if not validate_doctor_availability(db, new_doctor_id, facility_id, new_date, new_time):
+            raise HTTPException(
+                status_code=400, 
+                detail="Doctor is not available at the requested time"
+            )
+        
+        # Get new DCID
+        new_dcid = get_available_dcid(db, new_doctor_id, facility_id, new_date, new_time)
+        filtered_data['DCID'] = new_dcid
+
     # Apply updates
     for field_name, new_value in filtered_data.items():
         setattr(appt, field_name, new_value)
 
     try:
+        # Handle slot booking changes
+        if needs_slot_update:
+            # Free up old slot
+            if old_dcid:
+                old_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == old_dcid).first()
+                if old_slot:
+                    old_slot.Booked_status = 'N'
+            
+            # Book new slot
+            new_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == filtered_data['DCID']).first()
+            if new_slot:
+                new_slot.Booked_status = 'Y'
+
         db.commit()
         db.refresh(appt)
         
@@ -720,6 +863,7 @@ def update_appointment(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+
 @router.delete("/{appointment_id}")
 def delete_appointment(
     appointment_id: int,
@@ -736,6 +880,126 @@ def delete_appointment(
     )
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    db.delete(appt)
-    db.commit()
-    return {"detail": "Deleted successfully"}
+    
+    try:
+        # Free up the booked slot before deleting
+        if appt.DCID:
+            booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == appt.DCID).first()
+            if booked_slot:
+                booked_slot.Booked_status = 'N'
+        
+        db.delete(appt)
+        db.commit()
+        return {"detail": "Deleted successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting appointment: {str(e)}")
+
+
+# -------------------- Additional Endpoints for New Schedule System --------------------
+
+# @router.get("/available-slots/")
+# def get_available_slots(
+#     doctor_id: int = Query(...),
+#     facility_id: int = Query(..., alias="FacilityID"),
+#     date: date = Query(...),
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Get available time slots for a doctor on a specific date.
+#     """
+#     weekday = date.strftime('%A')
+    
+#     # Get doctor's schedule for the day
+#     schedules = (
+#         db.query(DoctorSchedule)
+#         .filter(
+#             DoctorSchedule.Doctor_id == doctor_id,
+#             DoctorSchedule.Facility_id == facility_id,
+#             DoctorSchedule.Start_Date <= date,
+#             DoctorSchedule.End_Date >= date,
+#             DoctorSchedule.WeekDay == weekday
+#         )
+#         .all()
+#     )
+    
+#     if not schedules:
+#         return {"available_slots": [], "message": f"Doctor is not scheduled on {weekday}s"}
+    
+#     # Get booked slots for the day
+#     booked_slots = (
+#         db.query(DoctorBookedSlots)
+#         .filter(
+#             DoctorBookedSlots.Doctor_id == doctor_id,
+#             DoctorBookedSlots.Facility_id == facility_id,
+#             DoctorBookedSlots.Slot_date == date,
+#             DoctorBookedSlots.Booked_status == 'Y'
+#         )
+#         .all()
+#     )
+    
+#     available_slots = []
+#     for schedule in schedules:
+#         # Check if this time slot is booked
+#         is_booked = any(
+#             slot.Start_Time <= schedule.Slot_Start_Time < slot.End_Time
+#             for slot in booked_slots
+#         )
+        
+#         if not is_booked:
+#             available_slots.append({
+#                 "window_num": schedule.Window_Num,
+#                 "start_time": schedule.Slot_Start_Time.strftime("%H:%M"),
+#                 "end_time": schedule.Slot_End_Time.strftime("%H:%M"),
+#                 "time_slot": f"{schedule.Slot_Start_Time.strftime('%H:%M')} - {schedule.Slot_End_Time.strftime('%H:%M')}"
+#             })
+    
+#     return {
+#         "available_slots": available_slots,
+#         "total_slots": len(schedules),
+#         "available_count": len(available_slots),
+#         "booked_count": len(booked_slots)
+#     }
+
+
+@router.get("/doctor-schedule/")
+def get_doctor_schedule(
+    doctor_id: int = Query(...),
+    facility_id: int = Query(..., alias="FacilityID"),
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Get doctor's schedule for a date range.
+    """
+    schedules = (
+        db.query(DoctorSchedule)
+        .filter(
+            DoctorSchedule.Doctor_id == doctor_id,
+            DoctorSchedule.Facility_id == facility_id,
+            DoctorSchedule.Start_Date <= end_date,
+            DoctorSchedule.End_Date >= start_date
+        )
+        .all()
+    )
+    
+    schedule_data = []
+    for schedule in schedules:
+        schedule_data.append({
+            "weekday": schedule.WeekDay,
+            "window_num": schedule.Window_Num,
+            "start_time": schedule.Slot_Start_Time.strftime("%H:%M"),
+            "end_time": schedule.Slot_End_Time.strftime("%H:%M"),
+            "schedule_period": {
+                "start_date": schedule.Start_Date.strftime("%Y-%m-%d"),
+                "end_date": schedule.End_Date.strftime("%Y-%m-%d")
+            }
+        })
+    
+    return {
+        "doctor_id": doctor_id,
+        "facility_id": facility_id,
+        "schedules": schedule_data
+    }
