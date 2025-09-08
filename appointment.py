@@ -279,13 +279,6 @@ def create_appointment(
         raise HTTPException(500, f"Error creating appointment: {str(e)}")
 
 
-LOCAL_TIMEZONE = 'Asia/Kolkata'  # Change this to your timezone
-
-def get_local_time(utc_time):
-    """Convert UTC time to local timezone"""
-    local_tz = pytz.timezone(LOCAL_TIMEZONE)
-    return utc_time.astimezone(local_tz)
-
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
@@ -322,17 +315,27 @@ def checkin_appointment(
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         prefix = "A" if mode == "a" else "W" if mode == "w" else "X"
         
-        # Use UTC for consistent date across all environments
-        today = datetime.now(timezone.utc).date()
+        # Get current times
+        utc_now = datetime.now(timezone.utc)
+        local_tz = pytz.timezone('Asia/Kolkata')  # Indian Standard Time
+        local_now = utc_now.astimezone(local_tz)
+        
+        # Use local date for token counting (this ensures tokens are consistent with user's day)
+        today = local_now.date()
         
         # Count existing tokens with the same prefix checked in TODAY at THIS FACILITY
+        # Convert today back to UTC for database comparison
+        today_utc_start = local_tz.localize(datetime.combine(today, datetime.min.time())).astimezone(timezone.utc)
+        today_utc_end = local_tz.localize(datetime.combine(today, datetime.max.time())).astimezone(timezone.utc)
+        
         count = (
             db.query(func.count(Appointment.AppointmentID))
             .filter(
                 Appointment.FacilityID == facility_id,
                 Appointment.TokenID.like(f"{prefix}%"),
                 Appointment.TokenID.isnot(None),
-                func.date(Appointment.CheckinTime) == today
+                Appointment.CheckinTime >= today_utc_start,
+                Appointment.CheckinTime <= today_utc_end
             )
             .scalar() or 0
         )
@@ -351,7 +354,8 @@ def checkin_appointment(
                 .filter(
                     Appointment.TokenID == test_token,
                     Appointment.FacilityID == facility_id,
-                    func.date(Appointment.CheckinTime) == today
+                    Appointment.CheckinTime >= today_utc_start,
+                    Appointment.CheckinTime <= today_utc_end
                 )
                 .first()
             )
@@ -360,23 +364,18 @@ def checkin_appointment(
                 token_id = test_token
                 break
         
-        # Store UTC time in database
-        checkin_time_utc = datetime.now(timezone.utc)
-        
-        # Convert to local time for response
-        checkin_time_local = get_local_time(checkin_time_utc)
-        
-        # Update appointment with checkin details (store UTC in DB)
+        # Store UTC time in database (for consistency across servers)
         appt.TokenID = token_id
-        appt.CheckinTime = checkin_time_utc  # Store UTC in database
+        appt.CheckinTime = utc_now
         appt.AppointmentStatus = "Completed"
         db.commit()
         db.refresh(appt)
         
+        # Return local time in response (what user expects to see)
         return CheckinResponse(
             AppointmentID=appt.AppointmentID,
             TokenID=token_id,
-            CheckinTime=checkin_time_local.replace(tzinfo=None),  # Return local time without timezone info
+            CheckinTime=local_now.replace(tzinfo=None),  # Remove timezone info, keep local time
             AppointmentStatus="Completed",
             message="Patient checked in successfully"
         )
@@ -384,7 +383,6 @@ def checkin_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
-
 @router.post("/{appointment_id}/cancel", response_model=CancelResponse)
 def cancel_appointment(
     appointment_id: int,
@@ -574,4 +572,5 @@ def delete_appointment(
     db.commit()
 
     return {"detail": "Deleted successfully"}
+
 
