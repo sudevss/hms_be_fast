@@ -237,46 +237,46 @@ def get_appointment(
     return appt
 
 
-@router.post("/", response_model=AppointmentResponse)
-def create_appointment(
-    appointment: AppointmentCreate,
-    db: Session = Depends(get_db)
-):
-    payload = appointment.dict(exclude_unset=True)
+# @router.post("/", response_model=AppointmentResponse)
+# def create_appointment(
+#     appointment: AppointmentCreate,
+#     db: Session = Depends(get_db)
+# ):
+#     payload = appointment.dict(exclude_unset=True)
 
-    # Set default values
-    payload["Cancelled"] = False
-    if "AppointmentStatus" not in payload:
-        payload["AppointmentStatus"] = "Scheduled"
+#     # Set default values
+#     payload["Cancelled"] = False
+#     if "AppointmentStatus" not in payload:
+#         payload["AppointmentStatus"] = "Scheduled"
 
-    # Check for duplicate appointments
-    exists = (
-        db.query(Appointment)
-        .filter(
-            Appointment.PatientID == payload["PatientID"],
-            Appointment.DoctorID == payload["DoctorID"],
-            Appointment.AppointmentDate == payload["AppointmentDate"],
-            Appointment.AppointmentTime == payload["AppointmentTime"],
-            Appointment.FacilityID == payload["FacilityID"]
-        )
-        .first()
-    )
-    if exists:
-        raise HTTPException(400, "Duplicate appointment exists")
+#     # Check for duplicate appointments
+#     exists = (
+#         db.query(Appointment)
+#         .filter(
+#             Appointment.PatientID == payload["PatientID"],
+#             Appointment.DoctorID == payload["DoctorID"],
+#             Appointment.AppointmentDate == payload["AppointmentDate"],
+#             Appointment.AppointmentTime == payload["AppointmentTime"],
+#             Appointment.FacilityID == payload["FacilityID"]
+#         )
+#         .first()
+#     )
+#     if exists:
+#         raise HTTPException(400, "Duplicate appointment exists")
 
-    # TokenID and CheckinTime will be generated during checkin, not during creation
-    payload["TokenID"] = None
-    payload["CheckinTime"] = None
+#     # TokenID and CheckinTime will be generated during checkin, not during creation
+#     payload["TokenID"] = None
+#     payload["CheckinTime"] = None
 
-    try:
-        new_appt = Appointment(**payload)
-        db.add(new_appt)
-        db.commit()
-        db.refresh(new_appt)
-        return new_appt
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Error creating appointment: {str(e)}")
+#     try:
+#         new_appt = Appointment(**payload)
+#         db.add(new_appt)
+#         db.commit()
+#         db.refresh(new_appt)
+#         return new_appt
+#     except Exception as e:
+#         db.rollback()
+#         raise HTTPException(500, f"Error creating appointment: {str(e)}")
 
 
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
@@ -572,5 +572,6 @@ def delete_appointment(
     db.commit()
 
     return {"detail": "Deleted successfully"}
+
 
 
