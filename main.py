@@ -15,7 +15,7 @@ from database import engine, Base, SessionLocal, get_db
 
 from router import (
     auth, doctors, patients, usermaster, facility,
-    slot_lookup, doctor_schedule, doctor_calendar,
+     doctor_schedule, 
     appointment, medical_record, billing,
     medical_document, login, dashboard, new_booking
 )
@@ -75,9 +75,9 @@ app.include_router(doctors.router)
 app.include_router(patients.router)
 app.include_router(usermaster.router)
 app.include_router(facility.router)
-app.include_router(slot_lookup.router)
+
 app.include_router(doctor_schedule.router)
-app.include_router(doctor_calendar.router)
+
 app.include_router(appointment.router)
 app.include_router(medical_record.router)
 app.include_router(billing.router)
@@ -113,4 +113,5 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
 
 # 404 Utility
 def get_notfound_exception():
+
     raise HTTPException(status_code=404, detail="Entry not found")
