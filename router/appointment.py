@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
 from typing import List, Optional
-from datetime import date, datetime, time
+from datetime import date, datetime, time,timezone
 from pydantic import BaseModel, validator
 from model import Appointment, Patients, Doctors, DoctorSchedule, DoctorBookedSlots
+import pytz
 
 from database import get_db
 from  router.new_booking import update_slot_booking_status   # ✅ import the slot updater
@@ -562,40 +563,48 @@ def checkin_appointment(
     # Check if appointment is cancelled
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Cannot checkin cancelled appointment")
-
+    
     try:
         # Generate TokenID based on appointment mode
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         prefix = "A" if mode == "a" else "W" if mode == "w" else "X"
-
+        
+        # Get current times
+        utc_now = datetime.now(timezone.utc)
+        local_tz = pytz.timezone('Asia/Kolkata')  # Indian Standard Time
+        local_now = utc_now.astimezone(local_tz)
+        
+        # Use local date for token counting (this ensures tokens are consistent with user's day)
+        today = local_now.date()
+        
         # Count existing tokens with the same prefix checked in TODAY at THIS FACILITY
-        today = date.today()
+        # Since you have AppointmentDate field, we can use that for more accurate token counting
         count = (
             db.query(func.count(Appointment.AppointmentID))
             .filter(
                 Appointment.FacilityID == facility_id,
                 Appointment.TokenID.like(f"{prefix}%"),
                 Appointment.TokenID.isnot(None),
-                func.date(Appointment.CheckinTime) == today
+                Appointment.AppointmentDate == today  # Use AppointmentDate from your model
             )
             .scalar() or 0
         )
-
+        
         # Generate simple token
         token_id = f"{prefix}{count + 1}"
         
-        # Handle race conditions
+        # Handle race conditions - check against your unique constraint
         max_retries = 5
         for attempt in range(max_retries):
             test_token = f"{prefix}{count + 1 + attempt}"
             
-            # Check if this token exists today at this facility
+            # Check if this token exists today at this facility (respecting your unique constraint)
             existing = (
                 db.query(Appointment)
                 .filter(
                     Appointment.TokenID == test_token,
                     Appointment.FacilityID == facility_id,
-                    func.date(Appointment.CheckinTime) == today
+                    Appointment.AppointmentDate == today  # This matches your unique constraint
                 )
                 .first()
             )
@@ -604,24 +613,22 @@ def checkin_appointment(
                 token_id = test_token
                 break
         
-        checkin_time = datetime.now()
-
-        # Update appointment with checkin details
+        # Store UTC time in database (for consistency across servers)
         appt.TokenID = token_id
-        appt.CheckinTime = checkin_time
+        appt.CheckinTime = utc_now
         appt.AppointmentStatus = "Completed"
-
         db.commit()
         db.refresh(appt)
-
+        
+        # Return local time in response (what user expects to see)
         return CheckinResponse(
             AppointmentID=appt.AppointmentID,
             TokenID=token_id,
-            CheckinTime=checkin_time,
+            CheckinTime=local_now.replace(tzinfo=None),  # Remove timezone info, keep local time
             AppointmentStatus="Completed",
             message="Patient checked in successfully"
         )
-
+        
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
