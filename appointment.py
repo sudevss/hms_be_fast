@@ -284,6 +284,10 @@ def checkin_appointment(
     facility_id: int = Query(..., alias="FacilityID"),
     db: Session = Depends(get_db)
 ):
+    """
+    This version requires database schema change to allow TokenID uniqueness 
+    per facility per day instead of global uniqueness
+    """
     # Find the appointment
     appt = (
         db.query(Appointment)
@@ -304,43 +308,68 @@ def checkin_appointment(
     # Check if appointment is cancelled
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Cannot checkin cancelled appointment")
-
+    
     try:
         # Generate TokenID based on appointment mode
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         prefix = "A" if mode == "a" else "W" if mode == "w" else "X"
-
-        # Count existing tokens with the same mode checked in TODAY only
-        today = date.today()
+        
+        # CHANGE 1: Use UTC for consistent date across all environments
+        today = datetime.now(timezone.utc).date()
+        
+        # Count existing tokens with the same prefix checked in TODAY at THIS FACILITY
         count = (
             db.query(func.count(Appointment.AppointmentID))
             .filter(
-                Appointment.AppointmentMode.ilike(mode),
-                Appointment.TokenID.isnot(None),  # Only count appointments that have been checked in
-                func.date(Appointment.CheckinTime) == today  # Only count today's check-ins
+                Appointment.FacilityID == facility_id,
+                Appointment.TokenID.like(f"{prefix}%"),
+                Appointment.TokenID.isnot(None),
+                func.date(Appointment.CheckinTime) == today
             )
             .scalar() or 0
         )
-
+        
+        # Generate simple token
         token_id = f"{prefix}{count + 1}"
-        checkin_time = datetime.now().replace(second=0, microsecond=0)
-
+        
+        # Handle race conditions
+        max_retries = 5
+        for attempt in range(max_retries):
+            test_token = f"{prefix}{count + 1 + attempt}"
+            
+            # Check if this token exists today at this facility
+            existing = (
+                db.query(Appointment)
+                .filter(
+                    Appointment.TokenID == test_token,
+                    Appointment.FacilityID == facility_id,
+                    func.date(Appointment.CheckinTime) == today
+                )
+                .first()
+            )
+            
+            if not existing:
+                token_id = test_token
+                break
+        
+        # CHANGE 2: Use UTC timezone for consistent time storage
+        checkin_time = datetime.now(timezone.utc)
+        
         # Update appointment with checkin details
         appt.TokenID = token_id
         appt.CheckinTime = checkin_time
         appt.AppointmentStatus = "Completed"
-
         db.commit()
         db.refresh(appt)
-
+        
         return CheckinResponse(
             AppointmentID=appt.AppointmentID,
             TokenID=token_id,
-            CheckinTime=checkin_time,
+            CheckinTime=checkin_time,  # This will now be consistent UTC time
             AppointmentStatus="Completed",
             message="Patient checked in successfully"
         )
-
+        
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
@@ -533,4 +562,5 @@ def delete_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
     db.delete(appt)
     db.commit()
+
     return {"detail": "Deleted successfully"}
