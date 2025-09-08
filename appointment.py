@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 from typing import List, Optional
-from datetime import date, datetime, time
+from datetime import date, datetime, time,timezone
 from pydantic import BaseModel, validator
+import pytz
 
 from database import get_db
 from model import Appointment, DoctorCalendar
@@ -278,6 +279,13 @@ def create_appointment(
         raise HTTPException(500, f"Error creating appointment: {str(e)}")
 
 
+LOCAL_TIMEZONE = 'Asia/Kolkata'  # Change this to your timezone
+
+def get_local_time(utc_time):
+    """Convert UTC time to local timezone"""
+    local_tz = pytz.timezone(LOCAL_TIMEZONE)
+    return utc_time.astimezone(local_tz)
+
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
@@ -314,7 +322,7 @@ def checkin_appointment(
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         prefix = "A" if mode == "a" else "W" if mode == "w" else "X"
         
-        # CHANGE 1: Use UTC for consistent date across all environments
+        # Use UTC for consistent date across all environments
         today = datetime.now(timezone.utc).date()
         
         # Count existing tokens with the same prefix checked in TODAY at THIS FACILITY
@@ -352,12 +360,15 @@ def checkin_appointment(
                 token_id = test_token
                 break
         
-        # CHANGE 2: Use UTC timezone for consistent time storage
-        checkin_time = datetime.now(timezone.utc)
+        # Store UTC time in database
+        checkin_time_utc = datetime.now(timezone.utc)
         
-        # Update appointment with checkin details
+        # Convert to local time for response
+        checkin_time_local = get_local_time(checkin_time_utc)
+        
+        # Update appointment with checkin details (store UTC in DB)
         appt.TokenID = token_id
-        appt.CheckinTime = checkin_time
+        appt.CheckinTime = checkin_time_utc  # Store UTC in database
         appt.AppointmentStatus = "Completed"
         db.commit()
         db.refresh(appt)
@@ -365,7 +376,7 @@ def checkin_appointment(
         return CheckinResponse(
             AppointmentID=appt.AppointmentID,
             TokenID=token_id,
-            CheckinTime=checkin_time,  # This will now be consistent UTC time
+            CheckinTime=checkin_time_local.replace(tzinfo=None),  # Return local time without timezone info
             AppointmentStatus="Completed",
             message="Patient checked in successfully"
         )
@@ -373,7 +384,6 @@ def checkin_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
-
 
 @router.post("/{appointment_id}/cancel", response_model=CancelResponse)
 def cancel_appointment(
@@ -564,3 +574,4 @@ def delete_appointment(
     db.commit()
 
     return {"detail": "Deleted successfully"}
+
