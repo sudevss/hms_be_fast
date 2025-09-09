@@ -126,6 +126,7 @@ def update_slot_booking_status(db, dcid, status="Booked"):
 def validate_appointment_constraints(db: Session, patient_id: int, doctor_id: int, 
                                    facility_id: int, appointment_date: date, appointment_time: time):
     try:
+        # Check for overlapping appointments (same patient, same date, same time)
         overlapping = db.query(model.Appointment).filter(
             model.Appointment.PatientID == patient_id,
             model.Appointment.AppointmentDate == appointment_date,
@@ -136,14 +137,8 @@ def validate_appointment_constraints(db: Session, patient_id: int, doctor_id: in
         if overlapping:
             return False, "Patient already has an appointment at this time"
         
-        same_day_appointments = db.query(model.Appointment).filter(
-            model.Appointment.PatientID == patient_id,
-            model.Appointment.AppointmentDate == appointment_date,
-            model.Appointment.Cancelled == False
-        ).count()
-        
-        if same_day_appointments >= 3:
-            return False, "Patient already has maximum appointments (3) for this date"
+        # Removed the daily appointment limit check
+        # Now patients can book unlimited appointments per day
         
         return True, "Validation passed"
         
