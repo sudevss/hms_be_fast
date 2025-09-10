@@ -116,6 +116,7 @@ class doctor_response(BaseModel):
     email: Optional[str] = None
     specialization: str
     consultation_fee: Optional[Decimal] = None
+    ABDM_NHPR_id: Optional[str] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
@@ -292,6 +293,7 @@ async def get_all_doctors(
                 email=getattr(doctor, 'email', None),
                 specialization=doctor.specialization,
                 consultation_fee=getattr(doctor, 'consultation_fee', None),
+                ABDM_NHPR_id=getattr(doctor, 'ABDM_NHPR_id', None),
                 gender=getattr(doctor, 'gender', None),
                 age=getattr(doctor, 'age', None),
                 experience=getattr(doctor, 'experience', None),
@@ -350,7 +352,7 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
             email=getattr(doctor, 'email', None),
             specialization=doctor.specialization,
             consultation_fee=getattr(doctor, 'consultation_fee', None),
-            ABDM_NHPR_id=doctor.ABDM_NHPR_id,
+            ABDM_NHPR_id=getattr(doctor, 'ABDM_NHPR_id', None),
             FacilityID=doctor.FacilityID,
             gender=getattr(doctor, 'gender', None),
             age=getattr(doctor, 'age', None),
@@ -472,6 +474,7 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Sess
             email=getattr(existing_doctor, 'email', None),
             specialization=existing_doctor.specialization,
             consultation_fee=existing_doctor.consultation_fee,
+            ABDM_NHPR_id=getattr(existing_doctor, 'ABDM_NHPR_id', None),
             gender=getattr(existing_doctor, 'gender', None),
             age=getattr(existing_doctor, 'age', None),
             experience=getattr(existing_doctor, 'experience', None),
