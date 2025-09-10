@@ -5,7 +5,6 @@ from datetime import date
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
-from .auth import get_current_user, get_user_exception
 import model
 from database import engine, SessionLocal
 
@@ -360,11 +359,8 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", tags=["doctors"])
-async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
+async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db)):
     try:
-        if not adm:
-            raise get_user_exception()
-
         if doctor.FacilityID:
             facility = db.query(model.Facility).filter(model.Facility.FacilityID == doctor.FacilityID).first()
             if not facility:
@@ -397,12 +393,8 @@ async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db), adm:
         raise HTTPException(status_code=500, detail=f"Error adding doctor: {str(e)}")
 
 @router.api_route("/{doctor_id}", methods=["PUT"], tags=["doctors"], response_model=doctor_response)
-async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dict = Depends(get_current_user),
-                              db: Session = Depends(get_db)):
+async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Session = Depends(get_db)):
     try:
-        if not adm:
-            raise get_user_exception()
-
         existing_doctor = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
             model.Doctors.is_deleted == False  # Only allow updates for non-deleted doctors
@@ -483,12 +475,9 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, adm: dic
         raise HTTPException(status_code=500, detail=f"Error updating doctor: {str(e)}")
 
 @router.delete("/{doctor_id}", tags=["doctors"])
-async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
+async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db)):
     """Soft delete doctor by setting is_deleted=True"""
     try:
-        if not adm:
-            raise get_user_exception()
-
         req_doc = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
             model.Doctors.is_deleted == False  # Only allow deletion of non-deleted doctors
@@ -509,40 +498,11 @@ async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db), a
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting doctor: {str(e)}")
 
-# # Additional endpoint for hard delete (if needed for admin purposes)
-# @router.delete("/{doctor_id}/permanent", tags=["doctors"])
-# async def permanently_delete_doctor(doctor_id: int, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
-#     """Permanently delete doctor and all associated records (hard delete)"""
-#     try:
-#         if not adm:
-#             raise get_user_exception()
-
-#         req_doc = db.query(model.Doctors).filter(model.Doctors.id == doctor_id).first()
-#         if not req_doc:
-#             raise get_postnotfound_exception()
-
-#         # Delete associated schedules and booked slots first due to foreign key constraints
-#         db.query(model.DoctorSchedule).filter(model.DoctorSchedule.Doctor_id == doctor_id).delete()
-#         db.query(model.DoctorBookedSlots).filter(model.DoctorBookedSlots.Doctor_id == doctor_id).delete()
-        
-#         # Then delete the doctor
-#         db.query(model.Doctors).filter(model.Doctors.id == doctor_id).delete()
-#         db.commit()
-#         return successful_response(200)
-
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Error permanently deleting doctor: {str(e)}")
-
 # Additional endpoint to restore soft deleted doctor
 @router.patch("/{doctor_id}/restore", tags=["doctors"])
-async def restore_doctor(doctor_id: int, db: Session = Depends(get_db), adm: dict = Depends(get_current_user)):
+async def restore_doctor(doctor_id: int, db: Session = Depends(get_db)):
     """Restore a soft deleted doctor"""
     try:
-        if not adm:
-            raise get_user_exception()
-
         doctor = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
             model.Doctors.is_deleted == True  # Only restore deleted doctors

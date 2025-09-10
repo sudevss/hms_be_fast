@@ -91,14 +91,14 @@ class UserMaster(Base):
 
     facility = relationship("Facility", back_populates="users")
 
-class Admin(Base):
-    __tablename__ = "admin"
+# class Admin(Base):
+#     __tablename__ = "admin"
 
-    username = Column(String(50), primary_key=True, index=True)  # Added length - THIS WAS THE MAIN ERROR
-    hashed_pass = Column(String(255))                            # Added length for hashed passwords
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
+#     username = Column(String(50), primary_key=True, index=True)  # Added length - THIS WAS THE MAIN ERROR
+#     hashed_pass = Column(String(255))                            # Added length for hashed passwords
+#     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
 
-    facility = relationship("Facility")
+#     facility = relationship("Facility")
 
 class DoctorSchedule(Base):
     __tablename__ = "doctor_schedule"

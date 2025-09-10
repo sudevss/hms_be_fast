@@ -7,7 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, Query, 
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from .auth import get_current_user, get_user_exception
+# from .auth import get_current_user, get_user_exception
 import model
 from database import Base, engine, SessionLocal
 from .doctors import doctor_response
@@ -51,7 +51,6 @@ def get_mail_config():
     return ConnectionConfig(
         MAIL_USERNAME="divyanshnumb@gmail.com",
         MAIL_PASSWORD="jbomvyfqjcxtixrz",
-        MAIL_FROM="divyanshnumb@gmail.com",
         MAIL_PORT=465,
         MAIL_SERVER="smtp.gmail.com",
         MAIL_STARTTLS=False,
@@ -290,12 +289,8 @@ async def send_mail_background(email_list: List[str], name: str, room_no: int):
 @router.post("/", tags=["patients"])
 async def add_new_patient(patient: ui_patient, 
                          background_tasks: BackgroundTasks,
-                         db: Session = Depends(get_db),
-                         adm: dict = Depends(get_current_user)):
+                         db: Session = Depends(get_db)):
     try:
-        if not adm:
-            raise get_user_exception()
-        
         patient_model = model.Patients(
             firstname=patient.firstname,
             lastname=patient.lastname,
@@ -337,13 +332,9 @@ async def update_patient(
     patient: PatientUpdateSchema = None, 
     email: EmailUpdateSchema = None,
     background_tasks: BackgroundTasks = None,
-    db: Session = Depends(get_db),
-    adm: dict = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     try:
-        if not adm:
-            raise get_user_exception()
-
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
             model.Patients.FacilityID == facility_id
@@ -459,12 +450,8 @@ async def update_patient(
 @router.delete("/", tags=["patients"])
 async def delete_patient_details(patient_id: int = Query(..., description="Patient ID"),
                                 facility_id: int = Query(..., description="Facility ID"),
-                                db: Session = Depends(get_db), 
-                                adm: dict = Depends(get_current_user)):
+                                db: Session = Depends(get_db)):
     try:
-        if not adm:
-            raise get_user_exception()
-        
         # Single query to check existence and delete
         deleted_count = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
