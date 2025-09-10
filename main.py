@@ -14,7 +14,7 @@ load_dotenv()
 from database import engine, Base, SessionLocal, get_db
 
 from router import (
-    auth, doctors, patients, usermaster, facility,
+     doctors, patients, usermaster, facility,
      doctor_schedule, 
     appointment, medical_record, billing,
     medical_document, login, dashboard, new_booking
@@ -70,7 +70,7 @@ except Exception as e:
 
 
 # Include all routers
-app.include_router(auth.router)
+# app.include_router(auth.router)
 app.include_router(doctors.router)
 app.include_router(patients.router)
 app.include_router(usermaster.router)
@@ -115,3 +115,4 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
 def get_notfound_exception():
 
     raise HTTPException(status_code=404, detail="Entry not found")
+
