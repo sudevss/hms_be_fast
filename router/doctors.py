@@ -110,6 +110,8 @@ class facility_response(BaseModel):
 class doctor_response(BaseModel):
     id: int
     doctor_name: str  # Combined first and last name
+    firstname: str
+    lastname: str
     phone_number: Optional[str] = None
     email: Optional[str] = None
     specialization: str
@@ -126,6 +128,8 @@ class doctor_response(BaseModel):
 class doctor_schema_with_schedule(BaseModel):
     id: int
     doctor_name: str  # Combined first and last name
+    firstname: str
+    lastname: str
     phone_number: Optional[str] = None
     email: Optional[str] = None
     specialization: str
@@ -282,6 +286,8 @@ async def get_all_doctors(
             result.append(doctor_response(
                 id=doctor.id,
                 doctor_name=combine_doctor_name(doctor.firstname, doctor.lastname),
+                firstname=doctor.firstname,
+                lastname=doctor.lastname,
                 phone_number=getattr(doctor, 'phone_number', None),
                 email=getattr(doctor, 'email', None),
                 specialization=doctor.specialization,
@@ -338,6 +344,8 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
         return doctor_schema_with_schedule(
             id=doctor.id,
             doctor_name=combine_doctor_name(doctor.firstname, doctor.lastname),
+            firstname=doctor.firstname,
+            lastname=doctor.lastname,
             phone_number=getattr(doctor, 'phone_number', None),
             email=getattr(doctor, 'email', None),
             specialization=doctor.specialization,
@@ -458,6 +466,8 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Sess
         return doctor_response(
             id=existing_doctor.id,
             doctor_name=combine_doctor_name(existing_doctor.firstname, existing_doctor.lastname),
+            firstname=existing_doctor.firstname,
+            lastname=existing_doctor.lastname,
             phone_number=getattr(existing_doctor, 'phone_number', None),
             email=getattr(existing_doctor, 'email', None),
             specialization=existing_doctor.specialization,
