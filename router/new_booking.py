@@ -266,9 +266,11 @@ class DashboardAppointmentResponse(BaseModel):
 class PatientDetails(BaseModel):
     id: int
     name: str
+    firstname: Optional[str] = None
+    lastname: Optional[str] = None
     contact_number: str
     age: Optional[int] = None
-    dob: Optional[date] = None
+    dob: Optional[str] = None
     address: Optional[str] = None
     gender: Optional[str] = None
     email_id: Optional[str] = None
@@ -535,9 +537,11 @@ def dashboard_patient_lookup(
             patient_details_list.append(PatientDetails(
                 id=patient.id,
                 name=full_name,
+                firstname=patient.firstname,
+                lastname=patient.lastname,
                 contact_number=patient.contact_number,
                 age=patient.age,
-                dob=patient.dob,
+                dob=patient.dob.isoformat() if patient.dob else None,
                 address=patient.address,
                 gender=patient.gender,
                 email_id=getattr(patient, 'email_id', None),
