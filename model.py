@@ -111,6 +111,7 @@ class DoctorSchedule(Base):
     Window_Num = Column(Integer, primary_key=True)
     Slot_Start_Time = Column(Time, nullable=False)
     Slot_End_Time = Column(Time, nullable=False)
+    Total_Slots = Column(String(50), nullable=True)
 
     facility = relationship("Facility", back_populates="doctor_schedules")
     doctor = relationship("Doctors", back_populates="doctor_schedules")

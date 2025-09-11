@@ -81,7 +81,8 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
                     WeekDay=weekday,
                     Window_Num=window_num,
                     Slot_Start_Time=existing_schedule.Slot_Start_Time,
-                    Slot_End_Time=existing_schedule.Slot_End_Time
+                    Slot_End_Time=existing_schedule.Slot_End_Time,
+                    Total_Slots=existing_schedule.Total_Slots if hasattr(existing_schedule, 'Total_Slots') else None
                 )
 
                 db.add(continuation_schedule)
@@ -495,6 +496,9 @@ async def create_schedule(
                             window_num
                         )
 
+                        # Parse totalSlots - convert empty string or None to None, otherwise keep as string
+                        total_slots = slot.totalSlots if slot.totalSlots and slot.totalSlots.strip() else None
+
                         # create new schedule for this segment
                         new_schedule = model.DoctorSchedule(
                             Facility_id=schedule.facilityId,
@@ -504,7 +508,8 @@ async def create_schedule(
                             WeekDay=weekday,
                             Window_Num=window_num,
                             Slot_Start_Time=start_time_obj,
-                            Slot_End_Time=end_time_obj
+                            Slot_End_Time=end_time_obj,
+                            Total_Slots=total_slots
                         )
 
                         db.add(new_schedule)
@@ -515,7 +520,7 @@ async def create_schedule(
                             'end_time': slot.endTime,
                             'segment_start_date': str(seg_start),
                             'segment_end_date': str(seg_end),
-                            'totalSlots': slot.totalSlots if hasattr(slot, 'totalSlots') else ""
+                            'totalSlots': slot.totalSlots
                         })
 
                 except ValueError as e:
@@ -601,7 +606,7 @@ async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(
                     slot_weeks.append({
                         "startTime": time_to_string(schedule.Slot_Start_Time),
                         "endTime": time_to_string(schedule.Slot_End_Time),
-                        "totalSlots": "",  # This field wasn't stored in DB, so empty
+                        "totalSlots": schedule.Total_Slots if hasattr(schedule, 'Total_Slots') and schedule.Total_Slots is not None else "",
                         "windowNum": str(schedule.Window_Num)
                     })
             else:
