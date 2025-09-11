@@ -594,23 +594,21 @@ async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(
         for weekday in weekdays:
             weekday_schedules = [s for s in schedules if s.WeekDay == weekday]
             
-            # Initialize 3 slot weeks for each weekday
-            slot_weeks = [
-                {"startTime": "", "endTime": "", "totalSlots": "", "windowNum": ""},
-                {"startTime": "", "endTime": "", "totalSlots": "", "windowNum": ""},
-                {"startTime": "", "endTime": "", "totalSlots": "", "windowNum": ""}
-            ]
-            
-            # Fill in the actual schedules
-            for schedule in weekday_schedules:
-                window_index = schedule.Window_Num - 1  # Convert to 0-based index
-                if 0 <= window_index < 3:
-                    slot_weeks[window_index] = {
+            if weekday_schedules:
+                # Doctor has schedules for this weekday - show actual slots
+                slot_weeks = []
+                for schedule in weekday_schedules:
+                    slot_weeks.append({
                         "startTime": time_to_string(schedule.Slot_Start_Time),
                         "endTime": time_to_string(schedule.Slot_End_Time),
                         "totalSlots": "",  # This field wasn't stored in DB, so empty
                         "windowNum": str(schedule.Window_Num)
-                    }
+                    })
+            else:
+                # Doctor has no schedules for this weekday - show one empty slot
+                slot_weeks = [
+                    {"startTime": "", "endTime": "", "totalSlots": "", "windowNum": ""}
+                ]
             
             weekdays_list.append({
                 "weekDay": weekday,
@@ -635,7 +633,6 @@ async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(
     except Exception as e:
         logger.error(f"Error getting schedules: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting schedules: {str(e)}")
-
 
 @router.delete("/{facility_id}/{doctor_id}/{start_date}/{end_date}/{window_num}", response_model=Dict)
 async def delete_schedule(facility_id: int, doctor_id: int, start_date: date, end_date: date, window_num: int, db: Session = Depends(get_db)):
