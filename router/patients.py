@@ -40,10 +40,8 @@ class PatientUpdateSchema(BaseModel):
     room_id: Optional[int] = None
     payment_status: Optional[int] = None
     ABDM_ABHA_id: Optional[str] = None
-   
-
-class EmailUpdateSchema(BaseModel):
-    email: Optional[List[EmailStr]] = None
+    facility_id: Optional[int] = None
+    email: Optional[str] = None
 
 # Cache configuration for better performance
 @lru_cache()
@@ -128,6 +126,7 @@ class VerifyOrder(BaseModel):
 
 # Optimized: Get all patients with doctor details# Optimized: Get all patients with doctor details from appointments
 # Optimized: Get all patients with doctor details from appointments
+# Optimized: Get all patients with doctor details from appointments
 @router.get("/", tags=["patients"])
 async def get_all_patients(facility_id: int = Query(..., description="Facility ID to filter patients"), 
                           db: Session = Depends(get_db)):
@@ -164,12 +163,20 @@ async def get_all_patients(facility_id: int = Query(..., description="Facility I
             
             patient_dict = {
                 "id": patient.id,
+                "firstname": patient.firstname,
+                "lastname": patient.lastname,
                 "name": f"{patient.firstname} {patient.lastname}",
-                "contact_number": patient.contact_number,
                 "age": patient.age,
+                "dob": patient.dob,
+                "contact_number": patient.contact_number,
                 "address": patient.address,
-                "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None),
                 "gender": patient.gender,
+                "disease": patient.disease,
+                "room_id": patient.room_id,
+                "payment_status": patient.payment_status,
+                "email_id": patient.email_id,
+                "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None),
+                "FacilityID": patient.FacilityID,
                 "doctor_visited": doctor_name,
                 "last_visited_date": last_visited_date
             }
@@ -179,6 +186,7 @@ async def get_all_patients(facility_id: int = Query(..., description="Facility I
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+# Optimized: Get patient by ID with doctor details from appointments
 # Optimized: Get patient by ID with doctor details from appointments
 @router.get("/{patient_id}", tags=["patients"])
 async def get_patient_byid(patient_id: int, 
@@ -218,12 +226,20 @@ async def get_patient_byid(patient_id: int,
 
         patient_response = {
             "id": patient.id,
+            "firstname": patient.firstname,
+            "lastname": patient.lastname,
             "name": f"{patient.firstname} {patient.lastname}",
-            "contact_number": patient.contact_number,
             "age": patient.age,
+            "dob": patient.dob,
+            "contact_number": patient.contact_number,
             "address": patient.address,
-            "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None),
             "gender": patient.gender,
+            "disease": patient.disease,
+            "room_id": patient.room_id,
+            "payment_status": patient.payment_status,
+            "email_id": patient.email_id,
+            "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None),
+            "FacilityID": patient.FacilityID,
             "doctor_visited": doctor_name,
             "last_visited_date": last_visited_date
         }
@@ -330,7 +346,6 @@ async def update_patient(
     patient_id: int,
     facility_id: int = Query(..., description="Facility ID"),
     patient: PatientUpdateSchema = None, 
-    email: EmailUpdateSchema = None,
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
@@ -410,25 +425,25 @@ async def update_patient(
             if current_value != v:
                 filtered_data[k] = v
         
-        # Handle email updates
+        # Handle email updates - now simplified to use direct email field
         send_email = False
-        if email and email.email:
-            valid_emails = [e for e in email.email if e and "@" in e and e.lower() not in invalid_strings]
-            
-            if valid_emails:
-                new_email = valid_emails[0]
+        if 'email' in filtered_data and filtered_data['email']:
+            new_email = filtered_data['email']
+            # Validate email format
+            if "@" in new_email and new_email.lower() not in invalid_strings:
                 current_email = getattr(existing_patient, 'email_id', None)
                 if current_email != new_email:
                     existing_patient.email_id = new_email
                     send_email = True
-                    filtered_data['email_updated'] = True
+                    # Remove email from filtered_data since we handled it separately
+                    del filtered_data['email']
         
         if not filtered_data and not send_email:
             raise HTTPException(status_code=400, detail="No valid fields provided for update")
         
         # Update patient fields efficiently
         for key, value in filtered_data.items():
-            if key != 'email_updated' and hasattr(existing_patient, key):
+            if hasattr(existing_patient, key):
                 setattr(existing_patient, key, value)
 
         db.commit()
@@ -437,7 +452,7 @@ async def update_patient(
         # Send email in background if needed
         if send_email and background_tasks:
             full_name = f"{existing_patient.firstname} {existing_patient.lastname}"
-            background_tasks.add_task(send_mail_background, valid_emails, full_name, existing_patient.room_id)
+            background_tasks.add_task(send_mail_background, [existing_patient.email_id], full_name, existing_patient.room_id)
         
         return successful_response(200)
     except HTTPException:

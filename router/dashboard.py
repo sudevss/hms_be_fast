@@ -424,8 +424,16 @@ async def get_doctor_details_for_dashboard(
         # Get ALL doctors info with their status (not just filtered ones)
         doctors_info = get_doctors_info_optimized(all_doctors, Date, FacilityID, db, day_of_week)
         
-        # Get token data (only for filtered appointments)
-        token_data = get_token_data_optimized(appointments, all_doctors)
+        # Filter appointments by current date AND only show checked-in appointments in token data
+        from datetime import date as date_class
+        current_date = date_class.today()
+        
+        # Filter appointments to only include those from current date that are also checked in
+        current_date_checked_in_appointments = [app for app in appointments 
+                                               if app.AppointmentDate == current_date and app.CheckinTime is not None]
+        
+        # Get token data (only for current date checked-in appointments)
+        token_data = get_token_data_optimized(current_date_checked_in_appointments, all_doctors)
 
         logger.info(f"Doctor dashboard query completed in {time_module.time() - start_time:.2f}s")
 
