@@ -1,16 +1,80 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date, datetime, time,timedelta
+from datetime import date, datetime, time, timedelta
 from pydantic import BaseModel, validator
 import re
+
 from database import get_db
 import model
 
-
 router = APIRouter(prefix="/new_booking", tags=["new_booking"])
 
+"""
+AppointmentTime format:
+The appointmentTime field should be provided either in 24-hour HH:MM (or HH:MM:SS) format 
+(e.g., "09:30", "14:30", "09:30:00") or in 12-hour shorthand with am/pm (hour only) 
+(e.g., "9am", "9pm", "12am", "12pm"). Minutes with am/pm like "9:30am" are NOT accepted.
+"""
+
 # -------------------- Helper Functions --------------------
+
+def parse_time_string(v) -> time:
+    """
+    Parse time input into datetime.time.
+
+    Supported formats:
+      - 24-hour: "HH:MM" or "HH:MM:SS"   e.g. "09:30", "14:30", "09:30:00"
+      - 12-hour shorthand (hour only): "9am", "9pm", "12am", "12pm"
+      - 12-hour with minutes: "9:15am", "02:05pm", "12:00pm", "12:00am"
+
+    Raises ValueError on invalid formats.
+    """
+    if isinstance(v, time):
+        return v.replace(second=0, microsecond=0)
+
+    s = str(v).strip().lower()
+
+    # 24-hour HH:MM or HH:MM:SS
+    if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', s):
+        parts = s.split(':')
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except Exception:
+            raise ValueError("Invalid HH:MM time components")
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("Hour must be 0-23 and minute must be 0-59")
+        return time(hour=hour, minute=minute)
+
+    # 12-hour with minutes like '9:15am' or '02:05pm'
+    m = re.match(r'^(\d{1,2}):(\d{2})(am|pm)$', s)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        period = m.group(3)
+        if not (1 <= hour <= 12 and 0 <= minute <= 59):
+            raise ValueError("Hour must be 1-12 and minute must be 0-59 for am/pm format")
+        if period == "pm" and hour != 12:
+            hour += 12
+        if period == "am" and hour == 12:
+            hour = 0
+        return time(hour=hour, minute=minute)
+
+    # shorthand like '9am' or '12pm' (hour only)
+    m2 = re.match(r'^(\d{1,2})(am|pm)$', s)
+    if m2:
+        hour = int(m2.group(1))
+        period = m2.group(2)
+        if not (1 <= hour <= 12):
+            raise ValueError("Hour in am/pm format must be 1-12")
+        if period == "pm" and hour != 12:
+            hour += 12
+        if period == "am" and hour == 12:
+            hour = 0
+        return time(hour=hour, minute=0)
+
+    raise ValueError("AppointmentTime must be one of: 'HH:MM' (24-hour), 'HH:MM:SS', '9am'/'9pm', or '9:15am'/'2:05pm'")
 
 def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int, appointment_date: date, appointment_time: time):
     """Enhanced version with proper facility_id handling - FIXED FIELD NAMES"""
@@ -196,6 +260,10 @@ class PatientInfo(BaseModel):
         return data
 
 class DashboardAppointmentCreate(BaseModel):
+    """
+    The appointmentTime field should be entered either in 24-hour format like "09:30" 
+    (or "09:30:00") or in 12-hour shorthand like "9am" or "9pm".
+    """
     patient_info: PatientInfo
     DoctorID: int
     FacilityID: int
@@ -207,20 +275,46 @@ class DashboardAppointmentCreate(BaseModel):
     payment_status: Optional[int] = 0
     payment_method: Optional[str] = "Cash"
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "patient_info": {
+                    "firstname": "",
+                    "lastname": "",
+                    "contact_number": "",
+                    "age": 0,
+                    "dob": "2025-01-01",
+                    "address": "",
+                    "gender": "",
+                    "email_id": "",
+                    "disease": "",
+                    "ABDM_ABHA_id": ""
+                },
+                "DoctorID": 0,
+                "FacilityID": 0,
+                "AppointmentDate": str(date.today()),
+                "AppointmentTime": "",   # <-- empty string shown in docs
+                "Reason": "string",
+                "AppointmentMode": "A",
+                "room_id": 0,
+                "payment_status": 0,
+                "payment_method": "Cash"
+            }
+        }
+
     @validator('AppointmentTime', pre=True)
     def parse_time(cls, v):
-        if v is None:
+        if v is None or v == "":
+            # Allow blank in example / docs, but runtime requests must provide a real time
             raise ValueError("AppointmentTime is required")
-        try:
-            if isinstance(v, str):
-                v = v.rstrip('Z')
-                return datetime.fromisoformat(f"2000-01-01T{v}").time().replace(second=0, microsecond=0)
-            if isinstance(v, datetime):
-                return v.time().replace(second=0, microsecond=0)
-            if isinstance(v, time):
-                return v.replace(second=0, microsecond=0)
-        except Exception:
-            raise ValueError("Invalid format for AppointmentTime")
+        # Strings like "9am" or "14:30" handled here
+        if isinstance(v, str):
+            return parse_time_string(v)
+        if isinstance(v, datetime):
+            return v.time().replace(second=0, microsecond=0)
+        if isinstance(v, time):
+            return v.replace(second=0, microsecond=0)
+        raise ValueError("Invalid format for AppointmentTime")
 
     @validator('AppointmentDate')
     def validate_appointment_date(cls, v):
@@ -286,6 +380,10 @@ class PatientLookupResponse(BaseModel):
     message: str
 
 class QuickAppointmentCreate(BaseModel):
+    """
+    The appointmentTime field should be entered either in 24-hour format like "09:30" 
+    (or "09:30:00") or in 12-hour shorthand like "9am" or "9pm".
+    """
     PatientID: int
     DoctorID: int
     FacilityID: int
@@ -297,6 +395,22 @@ class QuickAppointmentCreate(BaseModel):
     payment_status: Optional[int] = 0
     payment_method: Optional[str] = "Cash"
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "PatientID": 0,
+                "DoctorID": 0,
+                "FacilityID": 0,
+                "AppointmentDate": str(date.today()),
+                "AppointmentTime": "",   # <-- empty string shown in docs
+                "Reason": "string",
+                "AppointmentMode": "A",
+                "room_id": 1,
+                "payment_status": 0,
+                "payment_method": "Cash"
+            }
+        }
+
     @validator('PatientID')
     def validate_patient_id(cls, v):
         if not v or v <= 0:
@@ -305,18 +419,15 @@ class QuickAppointmentCreate(BaseModel):
 
     @validator('AppointmentTime', pre=True)
     def parse_time(cls, v):
-        if v is None:
+        if v is None or v == "":
             raise ValueError("AppointmentTime is required")
-        try:
-            if isinstance(v, str):
-                v = v.rstrip('Z')
-                return datetime.fromisoformat(f"2000-01-01T{v}").time().replace(second=0, microsecond=0)
-            if isinstance(v, datetime):
-                return v.time().replace(second=0, microsecond=0)
-            if isinstance(v, time):
-                return v.replace(second=0, microsecond=0)
-        except Exception:
-            raise ValueError("Invalid format for AppointmentTime")
+        if isinstance(v, str):
+            return parse_time_string(v)
+        if isinstance(v, datetime):
+            return v.time().replace(second=0, microsecond=0)
+        if isinstance(v, time):
+            return v.replace(second=0, microsecond=0)
+        raise ValueError("Invalid format for AppointmentTime")
 
     @validator('AppointmentDate')
     def validate_appointment_date(cls, v):
@@ -339,7 +450,35 @@ class QuickAppointmentCreate(BaseModel):
 
 # -------------------- Endpoints --------------------
 @router.post("/book", response_model=DashboardAppointmentResponse)
-def dashboard_book_appointment(booking_data: DashboardAppointmentCreate, db: Session = Depends(get_db)):
+def dashboard_book_appointment(
+    booking_data: DashboardAppointmentCreate = Body(
+        ...,
+        example={
+            "patient_info": {
+                "firstname": "",
+                "lastname": "",
+                "contact_number": "",
+                "age": 0,
+                "dob": "2025-01-01",
+                "address": "",
+                "gender": "",
+                "email_id": "",
+                "disease": "",
+                "ABDM_ABHA_id": ""
+            },
+            "DoctorID": 0,
+            "FacilityID": 0,
+            "AppointmentDate": str(date.today()),
+            "AppointmentTime": "",   # <-- EMPTY in docs
+            "Reason": "string",
+            "AppointmentMode": "A",
+            "room_id": 0,
+            "payment_status": 0,
+            "payment_method": "Cash"
+        }
+    ),
+    db: Session = Depends(get_db)
+):
     """Enhanced Dashboard API: Books appointment with proper validation flow"""
     try:
         schedule_valid, schedule_message = check_doctor_schedule_enhanced(
@@ -585,7 +724,24 @@ def dashboard_patient_lookup(
 
 
 @router.post("/book-existing", response_model=DashboardAppointmentResponse)
-def book_appointment_for_existing_patient(booking_data: QuickAppointmentCreate, db: Session = Depends(get_db)):
+def book_appointment_for_existing_patient(
+    booking_data: QuickAppointmentCreate = Body(
+        ...,
+        example={
+            "PatientID": 0,
+            "DoctorID": 0,
+            "FacilityID": 0,
+            "AppointmentDate": str(date.today()),
+            "AppointmentTime": "",   # <-- EMPTY in docs
+            "Reason": "string",
+            "AppointmentMode": "A",
+            "room_id": 1,
+            "payment_status": 0,
+            "payment_method": "Cash"
+        }
+    ),
+    db: Session = Depends(get_db)
+):
     """Enhanced Quick booking for existing patients using PatientID"""
     try:
         schedule_valid, schedule_message = check_doctor_schedule_enhanced(

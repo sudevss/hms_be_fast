@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
@@ -326,6 +327,13 @@ def get_all_appointments(
     # Format the results to include the new fields
     formatted_results = []
     for appointment, patient_firstname, patient_lastname, patient_phone, patient_paid, doctor_firstname, doctor_lastname, doctor_consultation_fee in results:
+        # Convert appointment mode to full name
+        appointment_mode_display = appointment.AppointmentMode
+        if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
+            appointment_mode_display = 'appointment'
+        elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
+            appointment_mode_display = 'walkin'
+        
         # Create appointment dict from the appointment object
         appointment_dict = {
             "AppointmentID": appointment.AppointmentID,
@@ -336,7 +344,7 @@ def get_all_appointments(
             "AppointmentDate": appointment.AppointmentDate,
             "AppointmentTime": appointment.AppointmentTime,
             "Reason": appointment.Reason,
-            "AppointmentMode": appointment.AppointmentMode,
+            "AppointmentMode": appointment_mode_display,
             "CheckinTime": appointment.CheckinTime,
             "Cancelled": appointment.Cancelled,
             "TokenID": appointment.TokenID,
@@ -387,6 +395,13 @@ def get_appointment(
     # Unpack the result
     appointment, patient_firstname, patient_lastname, patient_phone, patient_paid, doctor_firstname, doctor_lastname, doctor_consultation_fee = result
     
+    # Convert appointment mode to full name
+    appointment_mode_display = appointment.AppointmentMode
+    if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
+        appointment_mode_display = 'appointment'
+    elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
+        appointment_mode_display = 'walkin'
+    
     # Format the result to include the new fields
     appointment_dict = {
         "AppointmentID": appointment.AppointmentID,
@@ -397,7 +412,7 @@ def get_appointment(
         "AppointmentDate": appointment.AppointmentDate,
         "AppointmentTime": appointment.AppointmentTime,
         "Reason": appointment.Reason,
-        "AppointmentMode": appointment.AppointmentMode,
+        "AppointmentMode": appointment_mode_display,
         "CheckinTime": appointment.CheckinTime,
         "Cancelled": appointment.Cancelled,
         "TokenID": appointment.TokenID,
