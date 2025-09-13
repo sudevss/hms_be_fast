@@ -164,6 +164,7 @@ class AppointmentResponse(BaseModel):
     time_slot: Optional[str] = None  # Formatted time slot
     paid: Optional[bool] = None  # Payment status
     consultation_fee: Optional[float] = None  # Doctor's consultation fee
+    payment_method: Optional[str] = None  # Add this line
 
     class Config:
         from_attributes = True
@@ -355,7 +356,8 @@ def get_all_appointments(
             "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
             "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
             "paid": patient_paid,
-            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None
+            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
+            "payment_method": appointment.payment_method  # Add this line
         }
         formatted_results.append(AppointmentResponse(**appointment_dict))
     
@@ -423,7 +425,8 @@ def get_appointment(
         "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
         "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
         "paid": patient_paid,
-        "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None
+        "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
+        "payment_method": appointment.payment_method  # Add this line
     }
     
     return AppointmentResponse(**appointment_dict)
