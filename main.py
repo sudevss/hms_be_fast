@@ -17,7 +17,7 @@ from router import (
      doctors, patients, usermaster, facility,
      doctor_schedule, 
     appointment, medical_record, billing,
-    medical_document, login, dashboard, new_booking
+    medical_document, login, dashboard, new_booking,patient_diagnosis,patient_reports
 )
 
 import model
@@ -85,6 +85,8 @@ app.include_router(medical_document.router)
 app.include_router(login.router)
 app.include_router(dashboard.router)
 app.include_router(new_booking.router)
+app.include_router(patient_diagnosis.router)
+app.include_router(patient_reports.router)
 
 
 # Home route (API root info)
@@ -115,4 +117,5 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
 def get_notfound_exception():
 
     raise HTTPException(status_code=404, detail="Entry not found")
+
 
