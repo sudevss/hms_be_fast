@@ -471,6 +471,7 @@ async def delete_patient_details(patient_id: int = Query(..., description="Patie
         deleted_count = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
             model.Patients.FacilityID == facility_id
+            
         ).delete()
         
         if deleted_count == 0:

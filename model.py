@@ -1,5 +1,5 @@
 from sqlalchemy.orm import relationship
-from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean, Numeric, func, CheckConstraint, Index, UniqueConstraint, text
+from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean, Numeric, func, CheckConstraint, Index, UniqueConstraint, Text
 from database import Base
 import sqlalchemy as sa
 
@@ -231,3 +231,62 @@ class MedicalDocument(Base):
     patient = relationship("Patients", back_populates="medical_documents")
     doctor = relationship("Doctors", back_populates="medical_documents")
     facility = relationship("Facility")
+
+
+
+class PatientDiagnosis(Base):
+    __tablename__ = "patient_diagnosis"
+
+    DIAGNOSIS_ID = Column(Integer, primary_key=True, index=True)
+    FACILITY_ID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    PATIENT_ID = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    DATE = Column(Date, nullable=False)
+    APPOINTMENT_ID = Column(Integer, ForeignKey("appointment.AppointmentID"))
+    DOCTOR_ID = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    VITAL_BP = Column(String(50))
+    VITAL_HR = Column(String(50))
+    VITAL_TEMP = Column(String(50))
+    VITAL_SPO2 = Column(String(50))
+    CHIEF_COMPLAINT = Column(Text)
+    ASSESSMENT_NOTES = Column(Text)
+    TREATMENT_PLAN = Column(Text)
+    RECOMM_TESTS = Column(Text)
+    FOLLOWUP_DATE = Column(Date)
+
+    # Relationships
+    facility = relationship("Facility")
+    patient = relationship("Patients")
+    appointment = relationship("Appointment")
+    doctor = relationship("Doctors")
+
+    __table_args__ = (
+        Index("idx_patient_diagnosis_date", "PATIENT_ID", "DATE"),
+        Index("idx_facility_patient", "FACILITY_ID", "PATIENT_ID"),
+    )
+
+
+
+class PatientReports(Base):
+    __tablename__ = "patient_reports"
+
+    UPLOAD_ID = Column(Integer, primary_key=True, index=True, autoincrement=True)  # Generated automatically on upload
+    FACILITY_ID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    PATIENT_ID = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    DATE = Column(Date, nullable=False)
+    APPOINTMENT_ID = Column(Integer, ForeignKey("appointment.AppointmentID"))
+    DIAGNOSIS_ID = Column(Integer, ForeignKey("patient_diagnosis.DIAGNOSIS_ID"))
+    FILENAME = Column(Text, nullable=False)
+    FILE_BLOB = Column(sa.LargeBinary)  # BLOB type for storing file data
+
+    # Relationships
+    facility = relationship("Facility")
+    patient = relationship("Patients")
+    appointment = relationship("Appointment")
+    diagnosis = relationship("PatientDiagnosis")
+
+    __table_args__ = (
+        Index("idx_patient_reports_facility", "FACILITY_ID"),
+        Index("idx_patient_reports_patient", "PATIENT_ID"),
+        Index("idx_patient_reports_date", "DATE"),
+        Index("idx_patient_reports_appointment", "APPOINTMENT_ID"),
+    )
