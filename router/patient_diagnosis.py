@@ -30,20 +30,20 @@ router = APIRouter(
 # Pydantic Models for Request/Response
 class PatientDiagnosisCreate(BaseModel):
     """Request model for creating/updating patient diagnosis - all fields included"""
-    FACILITY_ID: int = Field(..., description="Facility ID where diagnosis was made")
-    PATIENT_ID: int = Field(..., description="Patient ID")
-    DATE: date = Field(..., description="Diagnosis date")
-    APPOINTMENT_ID: Optional[int] = Field(None, description="Associated appointment ID")
-    DOCTOR_ID: int = Field(..., description="Doctor ID who made the diagnosis")
-    VITAL_BP: Optional[str] = Field(None, max_length=50, description="Blood pressure reading")
-    VITAL_HR: Optional[str] = Field(None, max_length=50, description="Heart rate")
-    VITAL_TEMP: Optional[str] = Field(None, max_length=50, description="Temperature")
-    VITAL_SPO2: Optional[str] = Field(None, max_length=50, description="Blood oxygen saturation")
-    CHIEF_COMPLAINT: Optional[str] = Field(None, description="Patient's chief complaint")
-    ASSESSMENT_NOTES: Optional[str] = Field(None, description="Doctor's assessment notes")
-    TREATMENT_PLAN: Optional[str] = Field(None, description="Prescribed treatment plan")
-    RECOMM_TESTS: Optional[str] = Field(None, description="Recommended tests")
-    FOLLOWUP_DATE: Optional[date] = Field(None, description="Follow-up appointment date")
+    facility_id: int = Field(..., description="Facility ID where diagnosis was made")
+    patient_id: int = Field(..., description="Patient ID")
+    diagnosis_date: date = Field(..., description="Diagnosis date")
+    appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
+    doctor_id: int = Field(..., description="Doctor ID who made the diagnosis")
+    vital_bp: Optional[str] = Field(None, max_length=50, description="Blood pressure reading")
+    vital_hr: Optional[str] = Field(None, max_length=50, description="Heart rate")
+    vital_temp: Optional[str] = Field(None, max_length=50, description="Temperature")
+    vital_spo2: Optional[str] = Field(None, max_length=50, description="Blood oxygen saturation")
+    chief_complaint: Optional[str] = Field(None, description="Patient's chief complaint")
+    assessment_notes: Optional[str] = Field(None, description="Doctor's assessment notes")
+    treatment_plan: Optional[str] = Field(None, description="Prescribed treatment plan")
+    recomm_tests: Optional[str] = Field(None, description="Recommended tests")
+    followup_date: Optional[date] = Field(None, description="Follow-up appointment date")
 
     class Config:
         json_encoders = {
@@ -51,20 +51,20 @@ class PatientDiagnosisCreate(BaseModel):
         }
         json_schema_extra = {
             "example": {
-                "FACILITY_ID": 0,
-                "PATIENT_ID": 0,
-                "DATE": "2025-09-15",
-                "APPOINTMENT_ID": 0,
-                "DOCTOR_ID": 0,
-                "VITAL_BP": "120/80",
-                "VITAL_HR": "72",
-                "VITAL_TEMP": "98.6",
-                "VITAL_SPO2": "99",
-                "CHIEF_COMPLAINT": "Chest pain and shortness of breath",
-                "ASSESSMENT_NOTES": "Patient presents with mild chest discomfort, likely muscular strain",
-                "TREATMENT_PLAN": "Rest, pain medication as needed, follow-up in 1 week",
-                "RECOMM_TESTS": "ECG, Complete Blood Count, Chest X-ray",
-                "FOLLOWUP_DATE": "2025-09-22"
+                "facility_id": 0,
+                "patient_id": 0,
+                "diagnosis_date": "2025-09-15",
+                "appointment_id": 0,
+                "doctor_id": 0,
+                "vital_bp": "120/80",
+                "vital_hr": "72",
+                "vital_temp": "98.6",
+                "vital_spo2": "99",
+                "chief_complaint": "Chest pain and shortness of breath",
+                "assessment_notes": "Patient presents with mild chest discomfort, likely muscular strain",
+                "treatment_plan": "Rest, pain medication as needed, follow-up in 1 week",
+                "recomm_tests": "ECG, Complete Blood Count, Chest X-ray",
+                "followup_date": "2025-09-22"
             }
         }
 
@@ -72,21 +72,21 @@ class PatientDiagnosisCreate(BaseModel):
 def diagnosis_to_dict(diagnosis) -> Dict[str, Any]:
     """Convert PatientDiagnosis object to dictionary for JSON response"""
     return {
-        "DIAGNOSIS_ID": diagnosis.DIAGNOSIS_ID,
-        "FACILITY_ID": diagnosis.FACILITY_ID,
-        "PATIENT_ID": diagnosis.PATIENT_ID,
-        "DATE": diagnosis.DATE.isoformat() if diagnosis.DATE else None,
-        "APPOINTMENT_ID": diagnosis.APPOINTMENT_ID,
-        "DOCTOR_ID": diagnosis.DOCTOR_ID,
-        "VITAL_BP": diagnosis.VITAL_BP,
-        "VITAL_HR": diagnosis.VITAL_HR,
-        "VITAL_TEMP": diagnosis.VITAL_TEMP,
-        "VITAL_SPO2": diagnosis.VITAL_SPO2,
-        "CHIEF_COMPLAINT": diagnosis.CHIEF_COMPLAINT,
-        "ASSESSMENT_NOTES": diagnosis.ASSESSMENT_NOTES,
-        "TREATMENT_PLAN": diagnosis.TREATMENT_PLAN,
-        "RECOMM_TESTS": diagnosis.RECOMM_TESTS,
-        "FOLLOWUP_DATE": diagnosis.FOLLOWUP_DATE.isoformat() if diagnosis.FOLLOWUP_DATE else None
+        "diagnosis_id": diagnosis.DIAGNOSIS_ID,
+        "facility_id": diagnosis.FACILITY_ID,
+        "patient_id": diagnosis.PATIENT_ID,
+        "diagnosis_date": diagnosis.DATE.isoformat() if diagnosis.DATE else None,
+        "appointment_id": diagnosis.APPOINTMENT_ID,
+        "doctor_id": diagnosis.DOCTOR_ID,
+        "vital_bp": diagnosis.VITAL_BP,
+        "vital_hr": diagnosis.VITAL_HR,
+        "vital_temp": diagnosis.VITAL_TEMP,
+        "vital_spo2": diagnosis.VITAL_SPO2,
+        "chief_complaint": diagnosis.CHIEF_COMPLAINT,
+        "assessment_notes": diagnosis.ASSESSMENT_NOTES,
+        "treatment_plan": diagnosis.TREATMENT_PLAN,
+        "recomm_tests": diagnosis.RECOMM_TESTS,
+        "followup_date": diagnosis.FOLLOWUP_DATE.isoformat() if diagnosis.FOLLOWUP_DATE else None
     }
 
 # Utility function for success responses (same pattern as doctor.py)
@@ -106,32 +106,32 @@ async def create_or_update_patient_diagnosis(
     Create or update a patient diagnosis record.
     
     All required fields must be provided:
-    - FACILITY_ID: ID of the facility (required)
-    - PATIENT_ID: ID of the patient (required)
-    - DATE: Date of diagnosis (required)
-    - DOCTOR_ID: ID of the doctor making the diagnosis (required)
+    - facility_id: ID of the facility (required)
+    - patient_id: ID of the patient (required)
+    - diagnosis_date: Date of diagnosis (required)
+    - doctor_id: ID of the doctor making the diagnosis (required)
     
     Returns: JSON object with success message and created/updated record
     """
     try:
         # Validate that the facility exists
-        if diagnosis_data.FACILITY_ID:
+        if diagnosis_data.facility_id:
             facility = db.query(model.Facility).filter(
-                model.Facility.FacilityID == diagnosis_data.FACILITY_ID
+                model.Facility.FacilityID == diagnosis_data.facility_id
             ).first()
             if not facility:
                 raise HTTPException(status_code=400, detail="Facility not found")
         
         # Validate that the patient exists
         patient = db.query(model.Patients).filter(
-            model.Patients.id == diagnosis_data.PATIENT_ID
+            model.Patients.id == diagnosis_data.patient_id
         ).first()
         if not patient:
             raise HTTPException(status_code=400, detail="Patient not found")
         
         # Validate that the doctor exists
         doctor = db.query(model.Doctors).filter(
-            model.Doctors.id == diagnosis_data.DOCTOR_ID,
+            model.Doctors.id == diagnosis_data.doctor_id,
             model.Doctors.is_deleted == False,
             model.Doctors.is_active == True
         ).first()
@@ -139,15 +139,33 @@ async def create_or_update_patient_diagnosis(
             raise HTTPException(status_code=400, detail="Active doctor not found")
         
         # Validate appointment if provided
-        if diagnosis_data.APPOINTMENT_ID:
+        if diagnosis_data.appointment_id:
             appointment = db.query(model.Appointment).filter(
-                model.Appointment.AppointmentID == diagnosis_data.APPOINTMENT_ID
+                model.Appointment.AppointmentID == diagnosis_data.appointment_id
             ).first()
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
         
+        # Convert lowercase field names to uppercase for database model
+        diagnosis_dict = {
+            "FACILITY_ID": diagnosis_data.facility_id,
+            "PATIENT_ID": diagnosis_data.patient_id,
+            "DATE": diagnosis_data.diagnosis_date,
+            "APPOINTMENT_ID": diagnosis_data.appointment_id,
+            "DOCTOR_ID": diagnosis_data.doctor_id,
+            "VITAL_BP": diagnosis_data.vital_bp,
+            "VITAL_HR": diagnosis_data.vital_hr,
+            "VITAL_TEMP": diagnosis_data.vital_temp,
+            "VITAL_SPO2": diagnosis_data.vital_spo2,
+            "CHIEF_COMPLAINT": diagnosis_data.chief_complaint,
+            "ASSESSMENT_NOTES": diagnosis_data.assessment_notes,
+            "TREATMENT_PLAN": diagnosis_data.treatment_plan,
+            "RECOMM_TESTS": diagnosis_data.recomm_tests,
+            "FOLLOWUP_DATE": diagnosis_data.followup_date
+        }
+        
         # Create new diagnosis record
-        new_diagnosis = model.PatientDiagnosis(**diagnosis_data.dict())
+        new_diagnosis = model.PatientDiagnosis(**diagnosis_dict)
         
         db.add(new_diagnosis)
         db.commit()
@@ -170,7 +188,7 @@ async def get_patient_diagnosis(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     doctor_id: Optional[int] = Query(None, description="Doctor ID (optional)"),
-    date: Optional[date] = Query(None, description="Diagnosis date (optional)"),
+    diagnosis_date: Optional[date] = Query(None, description="Diagnosis date (optional)"),
     diagnosis_id: Optional[int] = Query(None, description="Diagnosis ID (optional)"),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
@@ -183,7 +201,7 @@ async def get_patient_diagnosis(
     
     Optional parameters:
     - doctor_id: Filter by doctor ID
-    - date: Filter by specific diagnosis date
+    - diagnosis_date: Filter by specific diagnosis date
     - diagnosis_id: Filter by specific diagnosis ID
     
     Returns: JSON array of diagnosis records
@@ -201,8 +219,8 @@ async def get_patient_diagnosis(
         if doctor_id is not None:
             query = query.filter(model.PatientDiagnosis.DOCTOR_ID == doctor_id)
         
-        if date is not None:
-            query = query.filter(model.PatientDiagnosis.DATE == date)
+        if diagnosis_date is not None:
+            query = query.filter(model.PatientDiagnosis.DATE == diagnosis_date)
         
         if diagnosis_id is not None:
             query = query.filter(model.PatientDiagnosis.DIAGNOSIS_ID == diagnosis_id)

@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any
-from datetime import date
+from datetime import date as Date
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, APIRouter, Depends, Query, UploadFile, File, Form
@@ -43,25 +43,25 @@ ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.txt', '.doc', '.docx'}
 # Pydantic Models for Request/Response
 class PatientReportCreate(BaseModel):
     """Request model for creating patient report metadata - all fields included"""
-    FACILITY_ID: int = Field(..., description="Facility ID where report was uploaded")
-    PATIENT_ID: int = Field(..., description="Patient ID")
-    DATE: date = Field(..., description="Report date")
-    APPOINTMENT_ID: Optional[int] = Field(None, description="Associated appointment ID")
-    DIAGNOSIS_ID: Optional[int] = Field(None, description="Associated diagnosis ID")
-    FILENAME: str = Field(..., description="Original filename")
+    facility_id: int = Field(..., description="Facility ID where report was uploaded")
+    patient_id: int = Field(..., description="Patient ID")
+    date: Date = Field(..., description="Report date")
+    appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
+    diagnosis_id: Optional[int] = Field(None, description="Associated diagnosis ID")
+    filename: str = Field(..., description="Original filename")
 
     class Config:
         json_encoders = {
-            date: lambda v: v.isoformat() if v else None
+            Date: lambda v: v.isoformat() if v else None
         }
         json_schema_extra = {
             "example": {
-                "FACILITY_ID": 1,
-                "PATIENT_ID": 123,
-                "DATE": "2025-09-15",
-                "APPOINTMENT_ID": 456,
-                "DIAGNOSIS_ID": 789,
-                "FILENAME": "patient_report_2025_09_15.pdf"
+                "facility_id": 1,
+                "patient_id": 123,
+                "date": "2025-09-15",
+                "appointment_id": 456,
+                "diagnosis_id": 789,
+                "filename": "patient_report_2025_09_15.pdf"
             }
         }
 
@@ -69,14 +69,14 @@ class PatientReportCreate(BaseModel):
 def report_to_dict(report) -> Dict[str, Any]:
     """Convert PatientReports object to dictionary for JSON response (excluding FILE_BLOB)"""
     return {
-        "UPLOAD_ID": report.UPLOAD_ID,
-        "FACILITY_ID": report.FACILITY_ID,
-        "PATIENT_ID": report.PATIENT_ID,
-        "DATE": report.DATE.isoformat() if report.DATE else None,
-        "APPOINTMENT_ID": report.APPOINTMENT_ID,
-        "DIAGNOSIS_ID": report.DIAGNOSIS_ID,
-        "FILENAME": report.FILENAME,
-        "FILE_SIZE": len(report.FILE_BLOB) if report.FILE_BLOB else 0
+        "upload_id": report.UPLOAD_ID,
+        "facility_id": report.FACILITY_ID,
+        "patient_id": report.PATIENT_ID,
+        "date": report.DATE.isoformat() if report.DATE else None,
+        "appointment_id": report.APPOINTMENT_ID,
+        "diagnosis_id": report.DIAGNOSIS_ID,
+        "filename": report.FILENAME,
+        "file_size": len(report.FILE_BLOB) if report.FILE_BLOB else 0
     }
 
 # Utility function for success responses (same pattern as doctor.py)
@@ -122,7 +122,7 @@ def get_database_size():
 async def upload_patient_report(
     facility_id: int = Form(..., description="Facility ID (mandatory)"),
     patient_id: int = Form(..., description="Patient ID (mandatory)"),
-    report_date: date = Form(..., description="Report date (mandatory)"),
+    report_date: Date = Form(..., description="Report date (mandatory)"),
     appointment_id: Optional[int] = Form(None, description="Associated appointment ID (optional)"),
     diagnosis_id: Optional[int] = Form(None, description="Associated diagnosis ID (optional)"),
     files: List[UploadFile] = File(..., description="Binary files to upload (mandatory)"),
@@ -305,7 +305,7 @@ async def upload_patient_report(
 async def get_patient_report_file(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
-    report_date: date = Query(..., description="Report date (mandatory)"),
+    report_date: Date = Query(..., description="Report date (mandatory)"),
     upload_id: int = Query(..., description="Upload ID (mandatory)"),
     db: Session = Depends(get_db)
 ):
@@ -371,7 +371,7 @@ async def get_patient_report_file(
 async def get_patient_reports(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
-    report_date: date = Query(..., description="Report date (mandatory)"),
+    report_date: Date = Query(..., description="Report date (mandatory)"),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
