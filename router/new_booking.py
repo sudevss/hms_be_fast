@@ -265,8 +265,8 @@ class DashboardAppointmentCreate(BaseModel):
     (or "09:30:00") or in 12-hour shorthand like "9am" or "9pm".
     """
     patient_info: PatientInfo
-    DoctorID: int
-    FacilityID: int
+    doctor_id: int
+    facility_id: int
     AppointmentDate: date
     AppointmentTime: time
     Reason: str
@@ -290,8 +290,8 @@ class DashboardAppointmentCreate(BaseModel):
                     "disease": "",
                     "ABDM_ABHA_id": ""
                 },
-                "DoctorID": 0,
-                "FacilityID": 0,
+                "doctor_id": 0,
+                "facility_id": 0,
                 "AppointmentDate": str(date.today()),
                 "AppointmentTime": "",   # <-- empty string shown in docs
                 "Reason": "string",
@@ -337,9 +337,9 @@ class DashboardAppointmentCreate(BaseModel):
 
 class AppointmentResponse(BaseModel):
     AppointmentID: int
-    PatientID: int
-    DoctorID: int
-    FacilityID: int
+    patient_id: int
+    doctor_id: int
+    facility_id: int
     DCID: int
     AppointmentDate: date
     AppointmentTime: time
@@ -384,9 +384,9 @@ class QuickAppointmentCreate(BaseModel):
     The appointmentTime field should be entered either in 24-hour format like "09:30" 
     (or "09:30:00") or in 12-hour shorthand like "9am" or "9pm".
     """
-    PatientID: int
-    DoctorID: int
-    FacilityID: int
+    patient_id: int
+    doctor_id: int
+    facility_id: int
     AppointmentDate: date
     AppointmentTime: time
     Reason: str
@@ -398,9 +398,9 @@ class QuickAppointmentCreate(BaseModel):
     class Config:
         schema_extra = {
             "example": {
-                "PatientID": 0,
-                "DoctorID": 0,
-                "FacilityID": 0,
+                "patient_id": 0,
+                "doctor_id": 0,
+                "facility_id": 0,
                 "AppointmentDate": str(date.today()),
                 "AppointmentTime": "",   # <-- empty string shown in docs
                 "Reason": "string",
@@ -411,10 +411,10 @@ class QuickAppointmentCreate(BaseModel):
             }
         }
 
-    @validator('PatientID')
+    @validator('patient_id')
     def validate_patient_id(cls, v):
         if not v or v <= 0:
-            raise ValueError("Valid PatientID is required")
+            raise ValueError("Valid patient_id is required")
         return v
 
     @validator('AppointmentTime', pre=True)
@@ -466,8 +466,8 @@ def dashboard_book_appointment(
                 "disease": "",
                 "ABDM_ABHA_id": ""
             },
-            "DoctorID": 0,
-            "FacilityID": 0,
+            "doctor_id": 0,
+            "facility_id": 0,
             "AppointmentDate": str(date.today()),
             "AppointmentTime": "",   # <-- EMPTY in docs
             "Reason": "string",
@@ -482,7 +482,7 @@ def dashboard_book_appointment(
     """Enhanced Dashboard API: Books appointment with proper validation flow"""
     try:
         schedule_valid, schedule_message = check_doctor_schedule_enhanced(
-            db, booking_data.DoctorID, booking_data.FacilityID, 
+            db, booking_data.doctor_id, booking_data.facility_id, 
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -490,7 +490,7 @@ def dashboard_book_appointment(
             raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
         
         slot_dcid, error_message = find_or_create_available_slot(
-            db, booking_data.DoctorID, booking_data.FacilityID,
+            db, booking_data.doctor_id, booking_data.facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -498,7 +498,7 @@ def dashboard_book_appointment(
             raise HTTPException(400, f"Booking validation failed: {error_message}")
         
         phone_number = booking_data.patient_info.contact_number
-        facility_id = booking_data.FacilityID
+        facility_id = booking_data.facility_id
         
         # Always create new patient - allow multiple patients with same phone number
         is_new_patient = True
@@ -542,19 +542,19 @@ def dashboard_book_appointment(
         }
         
         is_valid, validation_error = validate_appointment_constraints(
-            db, patient_id, booking_data.DoctorID, facility_id,
+            db, patient_id, booking_data.doctor_id, facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
         if not is_valid:
             raise HTTPException(400, f"Appointment validation failed: {validation_error}")
         
-        if not db.query(model.Doctors).filter(model.Doctors.id == booking_data.DoctorID).first():
+        if not db.query(model.Doctors).filter(model.Doctors.id == booking_data.doctor_id).first():
             raise HTTPException(404, "Doctor not found")
         
         new_appointment = model.Appointment(
             PatientID=patient_id,
-            DoctorID=booking_data.DoctorID,
+            DoctorID=booking_data.doctor_id,
             FacilityID=facility_id,
             DCID=slot_dcid,
             AppointmentDate=booking_data.AppointmentDate,
@@ -575,9 +575,9 @@ def dashboard_book_appointment(
         
         appointment_response = AppointmentResponse(
             AppointmentID=new_appointment.AppointmentID,
-            PatientID=new_appointment.PatientID,
-            DoctorID=new_appointment.DoctorID,
-            FacilityID=new_appointment.FacilityID,
+            patient_id=new_appointment.PatientID,
+            doctor_id=new_appointment.DoctorID,
+            facility_id=new_appointment.FacilityID,
             DCID=new_appointment.DCID,
             AppointmentDate=new_appointment.AppointmentDate,
             AppointmentTime=new_appointment.AppointmentTime,
@@ -612,7 +612,7 @@ def dashboard_book_appointment(
 @router.get("/lookup", response_model=PatientLookupResponse)
 def dashboard_patient_lookup(
     phone_number: str = Query(..., description="Patient phone number"),
-    facility_id: Optional[int] = Query(None, alias="FacilityID", description="Filter by specific facility"),
+    facility_id: Optional[int] = Query(None, alias="facility_id", description="Filter by specific facility"),
     db: Session = Depends(get_db)
 ):
     """Lookup ALL patients registered with the same phone number"""
@@ -728,9 +728,9 @@ def book_appointment_for_existing_patient(
     booking_data: QuickAppointmentCreate = Body(
         ...,
         example={
-            "PatientID": 0,
-            "DoctorID": 0,
-            "FacilityID": 0,
+            "patient_id": 0,
+            "doctor_id": 0,
+            "facility_id": 0,
             "AppointmentDate": str(date.today()),
             "AppointmentTime": "",   # <-- EMPTY in docs
             "Reason": "string",
@@ -742,10 +742,10 @@ def book_appointment_for_existing_patient(
     ),
     db: Session = Depends(get_db)
 ):
-    """Enhanced Quick booking for existing patients using PatientID"""
+    """Enhanced Quick booking for existing patients using patient_id"""
     try:
         schedule_valid, schedule_message = check_doctor_schedule_enhanced(
-            db, booking_data.DoctorID, booking_data.FacilityID,
+            db, booking_data.doctor_id, booking_data.facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -753,7 +753,7 @@ def book_appointment_for_existing_patient(
             raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
         
         slot_dcid, error_message = find_or_create_available_slot(
-            db, booking_data.DoctorID, booking_data.FacilityID,
+            db, booking_data.doctor_id, booking_data.facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -761,15 +761,15 @@ def book_appointment_for_existing_patient(
             raise HTTPException(400, f"Booking validation failed: {error_message}")
         
         existing_patient = db.query(model.Patients).filter(
-            model.Patients.id == booking_data.PatientID,
-            model.Patients.FacilityID == booking_data.FacilityID
+            model.Patients.id == booking_data.patient_id,
+            model.Patients.FacilityID == booking_data.facility_id
         ).first()
         
         if not existing_patient:
-            raise HTTPException(404, f"Patient with ID {booking_data.PatientID} not found in facility {booking_data.FacilityID}")
+            raise HTTPException(404, f"Patient with ID {booking_data.patient_id} not found in facility {booking_data.facility_id}")
         
         is_valid, validation_error = validate_appointment_constraints(
-            db, booking_data.PatientID, booking_data.DoctorID, booking_data.FacilityID,
+            db, booking_data.patient_id, booking_data.doctor_id, booking_data.facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -795,13 +795,13 @@ def book_appointment_for_existing_patient(
             "ABDM_ABHA_id": getattr(existing_patient, 'ABDM_ABHA_id', None)
         }
         
-        if not db.query(model.Doctors).filter(model.Doctors.id == booking_data.DoctorID).first():
+        if not db.query(model.Doctors).filter(model.Doctors.id == booking_data.doctor_id).first():
             raise HTTPException(404, "Doctor not found")
         
         new_appointment = model.Appointment(
-            PatientID=booking_data.PatientID,
-            DoctorID=booking_data.DoctorID,
-            FacilityID=booking_data.FacilityID,
+            PatientID=booking_data.patient_id,
+            DoctorID=booking_data.doctor_id,
+            FacilityID=booking_data.facility_id,
             DCID=slot_dcid,
             AppointmentDate=booking_data.AppointmentDate,
             AppointmentTime=booking_data.AppointmentTime,
@@ -821,9 +821,9 @@ def book_appointment_for_existing_patient(
         
         appointment_response = AppointmentResponse(
             AppointmentID=new_appointment.AppointmentID,
-            PatientID=new_appointment.PatientID,
-            DoctorID=new_appointment.DoctorID,
-            FacilityID=new_appointment.FacilityID,
+            patient_id=new_appointment.PatientID,
+            doctor_id=new_appointment.DoctorID,
+            facility_id=new_appointment.FacilityID,
             DCID=new_appointment.DCID,
             AppointmentDate=new_appointment.AppointmentDate,
             AppointmentTime=new_appointment.AppointmentTime,

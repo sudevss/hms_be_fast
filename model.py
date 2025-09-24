@@ -168,7 +168,7 @@ class Appointment(Base):
 
     _table_args_ = (
         CheckConstraint("AppointmentMode IN ('a','A','w','W')", name="check_appointment_mode"),
-        CheckConstraint("AppointmentStatus IN ('Scheduled','Completed','Cancelled')",
+        CheckConstraint("AppointmentStatus IN ('Scheduled','Waiting','Completed','Cancelled')",
                         name="check_appointment_status"),
         CheckConstraint(
             "payment_method IN ('Cash','Debit Card','Credit Card','UPI','Net Banking')",

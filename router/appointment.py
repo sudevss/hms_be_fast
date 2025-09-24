@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
@@ -143,6 +142,14 @@ class CancelRequest(BaseModel):
         from_attributes = True
 
 
+class PaymentRequest(BaseModel):
+    payment_status: bool = False  # Default to False instead of requiring it
+    payment_method: Optional[str] = None  # e.g., "cash", "card", "upi", etc.
+
+    class Config:
+        from_attributes = True
+
+
 class AppointmentResponse(BaseModel):
     AppointmentID: int
     PatientID: int
@@ -184,6 +191,17 @@ class CheckinResponse(BaseModel):
 class CancelResponse(BaseModel):
     AppointmentID: int
     Cancelled: bool
+    AppointmentStatus: str
+    message: str
+
+    class Config:
+        from_attributes = True
+
+
+class PaymentResponse(BaseModel):
+    AppointmentID: int
+    payment_status: bool
+    payment_method: Optional[str]
     AppointmentStatus: str
     message: str
 
@@ -297,14 +315,15 @@ def validate_doctor_availability(db: Session, doctor_id: int, facility_id: int, 
 
 @router.get("/", response_model=List[AppointmentResponse])
 def get_all_appointments(
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     date: date = Query(...),
+    appointment_status: Optional[str] = Query(None, alias="AppointmentStatus"),
     # starts_from: int = Query(0, ge=0),
     # max_results: int = Query(10, le=100),
     db: Session = Depends(get_db)
 ):
     # Modified query to include joins with Patients and Doctors tables
-    results = (
+    query = (
         db.query(
             Appointment,
             Patients.firstname.label('patient_firstname'),
@@ -319,11 +338,53 @@ def get_all_appointments(
         .join(Doctors, Appointment.DoctorID == Doctors.id)
         .filter(Appointment.FacilityID == facility_id)
         .filter(Appointment.AppointmentDate == date)
-        .filter(Appointment.CheckinTime == None)
+    )
+    
+    # Apply filters based on appointment_status parameter
+    if appointment_status:
+        status_lower = appointment_status.lower()
+        
+        if status_lower == "scheduled":
+            # Show scheduled appointments (not checked in, not cancelled)
+            query = query.filter(
+                Appointment.AppointmentStatus == "Scheduled",
+                Appointment.CheckinTime == None,
+                Appointment.Cancelled == False
+            )
+        elif status_lower == "waiting":
+            # Show waiting appointments (checked in but not completed, not cancelled)
+            query = query.filter(
+                Appointment.AppointmentStatus == "Waiting",
+                Appointment.CheckinTime != None,
+                Appointment.Cancelled == False
+            )
+        elif status_lower == "completed":
+            # Show completed appointments (checked in and payment processed, not cancelled)
+            query = query.filter(
+                Appointment.AppointmentStatus == "Completed",
+                Appointment.CheckinTime != None,
+                Appointment.Cancelled == False
+            )
+        elif status_lower == "cancelled":
+            # Show cancelled appointments
+            query = query.filter(
+                Appointment.AppointmentStatus == "Cancelled",
+                Appointment.Cancelled == True
+            )
+        else:
+            # If an invalid status is provided, filter by the exact status string
+            query = query.filter(Appointment.AppointmentStatus == appointment_status)
+    else:
+        # Default behavior: show scheduled appointments when no status is specified
+        query = query.filter(
+            Appointment.AppointmentStatus == "Scheduled",
+            Appointment.CheckinTime == None,
+            Appointment.Cancelled == False
+        )
+    
+    results = query.all()
         # .offset(starts_from)
         # .limit(max_results)
-        .all()
-    )
     
     # Format the results to include the new fields
     formatted_results = []
@@ -367,7 +428,7 @@ def get_all_appointments(
 @router.get("/{appointment_id}", response_model=AppointmentResponse)
 def get_appointment(
     appointment_id: int,
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     db: Session = Depends(get_db)
 ):
     # Use the same join logic as get_all_appointments
@@ -551,10 +612,12 @@ def create_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error creating appointment: {str(e)}")
+
+
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     db: Session = Depends(get_db)
 ):
     """
@@ -634,7 +697,7 @@ def checkin_appointment(
         # Store UTC time in database (for consistency across servers)
         appt.TokenID = token_id
         appt.CheckinTime = utc_now
-        appt.AppointmentStatus = "Completed"
+        appt.AppointmentStatus = "Waiting"
         db.commit()
         db.refresh(appt)
         
@@ -643,18 +706,20 @@ def checkin_appointment(
             AppointmentID=appt.AppointmentID,
             TokenID=token_id,
             CheckinTime=local_now.replace(tzinfo=None),  # Remove timezone info, keep local time
-            AppointmentStatus="Completed",
+            AppointmentStatus="Waiting",
             message="Patient checked in successfully"
         )
         
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error during checkin: {str(e)}")
+
+
 @router.post("/{appointment_id}/cancel", response_model=CancelResponse)
 def cancel_appointment(
     appointment_id: int,
     cancel_request: CancelRequest = CancelRequest(),
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     db: Session = Depends(get_db)
 ):
     """
@@ -710,11 +775,81 @@ def cancel_appointment(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error cancelling appointment: {str(e)}")
 
+
+
+
+
+# Updated payment endpoint logic
+@router.post("/{appointment_id}/payment", response_model=PaymentResponse)
+def update_payment_status(
+    appointment_id: int,
+    payment_request: PaymentRequest,
+    facility_id: int = Query(..., alias="facility_id"),
+    db: Session = Depends(get_db)
+):
+    """
+    Update payment status for an appointment and mark as completed regardless of payment status.
+    """
+    # Find the appointment
+    appt = (
+        db.query(Appointment)
+        .filter(
+            Appointment.AppointmentID == appointment_id,
+            Appointment.FacilityID == facility_id
+        )
+        .first()
+    )
+    
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    # Check if appointment is checked in
+    if appt.CheckinTime is None:
+        raise HTTPException(status_code=400, detail="Patient must be checked in before payment")
+    
+    # Check if appointment is cancelled
+    if appt.Cancelled:
+        raise HTTPException(status_code=400, detail="Cannot process payment for cancelled appointment")
+
+    try:
+        # Update payment status in the Patient table
+        patient = db.query(Patients).filter(Patients.id == appt.PatientID).first()
+        if patient:
+            patient.is_paid = payment_request.payment_status
+
+        # Update payment method in appointment if provided
+        if payment_request.payment_method:
+            appt.payment_method = payment_request.payment_method
+
+        # Always mark appointment as completed when payment endpoint is executed
+        appt.AppointmentStatus = "Completed"
+        
+        # Set appropriate message based on payment status
+        if payment_request.payment_status:
+            message = "Payment processed successfully. Appointment completed."
+        else:
+            message = "Payment marked as pending. Appointment completed."
+
+        db.commit()
+        db.refresh(appt)
+
+        return PaymentResponse(
+            AppointmentID=appt.AppointmentID,
+            payment_status=payment_request.payment_status,
+            payment_method=payment_request.payment_method,
+            AppointmentStatus=appt.AppointmentStatus,
+            message=message
+        )
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating payment status: {str(e)}")
+
 @router.patch("/{appointment_id}", response_model=AppointmentResponse)
 def update_appointment(
     appointment_id: int,
     updated: AppointmentUpdate,
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     db: Session = Depends(get_db)
 ):
     appt = (
@@ -913,7 +1048,7 @@ def update_appointment(
 @router.delete("/{appointment_id}")
 def delete_appointment(
     appointment_id: int,
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     db: Session = Depends(get_db)
 ):
     appt = (
@@ -948,7 +1083,7 @@ def delete_appointment(
 # @router.get("/available-slots/")
 # def get_available_slots(
 #     doctor_id: int = Query(...),
-#     facility_id: int = Query(..., alias="FacilityID"),
+#     facility_id: int = Query(..., alias="facility_id"),
 #     date: date = Query(...),
 #     db: Session = Depends(get_db)
 # ):
@@ -1012,7 +1147,7 @@ def delete_appointment(
 @router.get("/doctor-schedule/")
 def get_doctor_schedule(
     doctor_id: int = Query(...),
-    facility_id: int = Query(..., alias="FacilityID"),
+    facility_id: int = Query(..., alias="facility_id"),
     start_date: date = Query(...),
     end_date: date = Query(...),
     db: Session = Depends(get_db)

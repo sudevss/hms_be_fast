@@ -348,31 +348,31 @@ def get_appointment_details(FacilityID: int = Query(...), date: date = Query(...
 
 @router.get("/getDoctorDetails", response_model=DoctorDashboardResponse)
 async def get_doctor_details_for_dashboard(
-    FacilityID: int = Query(..., description="Facility ID"),
-    Date: date = Query(..., description="Date in YYYY-MM-DD format"),
-    DoctorID: Optional[int] = Query(None, description="Optional Doctor ID for filtering"),
+    facility_id: int = Query(..., description="Facility ID"),
+    date: date = Query(..., description="Date in YYYY-MM-DD format"),
+    doctor_id: Optional[int] = Query(None, description="Optional Doctor ID for filtering"),
     DoctorName: Optional[str] = Query(None, description="Optional Doctor Name for filtering"),
     db: Session = Depends(get_db)
 ):
     start_time = time_module.time()
-    logger.info(f"Starting doctor dashboard query for facility {FacilityID} on {Date}")
+    logger.info(f"Starting doctor dashboard query for facility {facility_id} on {date}")
     
     try:
-        day_of_week = get_day_of_week(Date)
+        day_of_week = get_day_of_week(date)
         
         # Verify facility exists
-        facility = db.query(model.Facility.FacilityID).filter(model.Facility.FacilityID == FacilityID).first()
+        facility = db.query(model.Facility.FacilityID).filter(model.Facility.FacilityID == facility_id).first()
         if not facility:
             raise HTTPException(status_code=404, detail="Facility not found")
 
         # Get ALL doctors in the facility for display
-        all_doctors = db.query(model.Doctors).filter(model.Doctors.FacilityID == FacilityID).all()
+        all_doctors = db.query(model.Doctors).filter(model.Doctors.FacilityID == facility_id).all()
         
         # Build filtered appointments query based on doctor filter
         appointments_query = db.query(model.Appointment).filter(
             and_(
-                model.Appointment.FacilityID == FacilityID,
-                model.Appointment.AppointmentDate == Date
+                model.Appointment.FacilityID == facility_id,
+                model.Appointment.AppointmentDate == date
             )
         )
         
@@ -380,18 +380,18 @@ async def get_doctor_details_for_dashboard(
         filtered_doctor_ids = []
         
         # Apply doctor ID filter only if provided and not None
-        if DoctorID is not None and DoctorID > 0:
-            appointments_query = appointments_query.filter(model.Appointment.DoctorID == DoctorID)
-            doctor_filter_info["doctor_id"] = DoctorID
-            filtered_doctor_ids = [DoctorID]
-            logger.info(f"Filtering by Doctor ID: {DoctorID}")
+        if doctor_id is not None and doctor_id > 0:
+            appointments_query = appointments_query.filter(model.Appointment.DoctorID == doctor_id)
+            doctor_filter_info["doctor_id"] = doctor_id
+            filtered_doctor_ids = [doctor_id]
+            logger.info(f"Filtering by Doctor ID: {doctor_id}")
             
         # Apply doctor name filter only if provided and not empty
         elif DoctorName is not None and DoctorName.strip():
             # Find doctors matching the name
             matching_doctors = db.query(model.Doctors.id).filter(
                 and_(
-                    model.Doctors.FacilityID == FacilityID,
+                    model.Doctors.FacilityID == facility_id,
                     func.concat(model.Doctors.firstname, ' ', model.Doctors.lastname).ilike(f"%{DoctorName.strip()}%")
                 )
             ).all()
@@ -405,7 +405,7 @@ async def get_doctor_details_for_dashboard(
             else:
                 # No matching doctors found
                 logger.warning(f"No doctors found matching name: {DoctorName}")
-                return create_empty_response_with_all_doctors(FacilityID, Date, day_of_week, doctor_filter_info, all_doctors, db)
+                return create_empty_response_with_all_doctors(facility_id, date, day_of_week, doctor_filter_info, all_doctors, db)
         else:
             # No filters applied - show all doctors' appointments
             logger.info("No doctor filters applied, showing all appointments")
@@ -419,10 +419,10 @@ async def get_doctor_details_for_dashboard(
         # Calculate summary with filtered appointments and filtered doctor IDs for available slots
         # If no doctor filter is applied, use all doctor IDs
         doctor_ids_for_summary = filtered_doctor_ids if filtered_doctor_ids else [doctor.id for doctor in all_doctors]
-        summary = calculate_summary_for_filtered_doctors(appointments, doctor_ids_for_summary, db, FacilityID, Date)
+        summary = calculate_summary_for_filtered_doctors(appointments, doctor_ids_for_summary, db, facility_id, date)
         
         # Get ALL doctors info with their status (not just filtered ones)
-        doctors_info = get_doctors_info_optimized(all_doctors, Date, FacilityID, db, day_of_week)
+        doctors_info = get_doctors_info_optimized(all_doctors, date, facility_id, db, day_of_week)
         
         # Filter appointments by current date AND only show checked-in appointments in token data
         from datetime import date as date_class
@@ -438,8 +438,8 @@ async def get_doctor_details_for_dashboard(
         logger.info(f"Doctor dashboard query completed in {time_module.time() - start_time:.2f}s")
 
         return DoctorDashboardResponse(
-            facility_id=FacilityID,
-            date=Date.strftime("%Y-%m-%d"),
+            facility_id=facility_id,
+            date=date.strftime("%Y-%m-%d"),
             day_of_week=day_of_week,
             doctor_filter=doctor_filter_info if doctor_filter_info else None,
             hourly_booking_chart=hourly_data,
