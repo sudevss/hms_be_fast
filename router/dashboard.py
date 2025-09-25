@@ -428,12 +428,14 @@ async def get_doctor_details_for_dashboard(
         from datetime import date as date_class
         current_date = date_class.today()
         
-        # Filter appointments to only include those from current date that are also checked in
-        current_date_checked_in_appointments = [app for app in appointments 
-                                               if app.AppointmentDate == current_date and app.CheckinTime is not None]
+        # Filter appointments to only include those from current date that are also waiting
+        current_date_waiting_appointments = [app for app in appointments 
+                                   if app.AppointmentDate == current_date and 
+                                   app.AppointmentStatus == 'Waiting' and 
+                                   not app.Cancelled]
         
         # Get token data (only for current date checked-in appointments)
-        token_data = get_token_data_optimized(current_date_checked_in_appointments, all_doctors)
+        token_data = get_token_data_optimized(current_date_waiting_appointments, all_doctors)
 
         logger.info(f"Doctor dashboard query completed in {time_module.time() - start_time:.2f}s")
 
