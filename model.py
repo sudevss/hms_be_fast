@@ -141,6 +141,7 @@ class DoctorBookedSlots(Base):
         ),
     )
 
+
 class Appointment(Base):
     __tablename__ = "appointment"
 
@@ -151,6 +152,7 @@ class Appointment(Base):
     DCID = Column(Integer, ForeignKey("doctor_booked_slots.DCID"), nullable=False, index=True)
 
     payment_method = Column(String(50), default="Cash")
+    payment_status = Column(Boolean, nullable=False, default=False)
     AppointmentDate = Column(Date, nullable=False, index=True)
     AppointmentTime = Column(Time, nullable=False)
     Reason = Column(String(200), nullable=False)

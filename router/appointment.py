@@ -226,6 +226,43 @@ class AppointmentDetailsResponse(BaseModel):
     hourly: List[HourlyData]
     summary: AppointmentSummary
 
+class PatientVisitReportResponse(BaseModel):
+    AppointmentID: int
+    PatientID: int
+    DoctorID: int
+    FacilityID: int
+    DCID: Optional[int] = None
+    AppointmentDate: date
+    AppointmentTime: time
+    Reason: Optional[str] = None
+    AppointmentMode: Optional[str] = None
+    CheckinTime: Optional[datetime] = None
+    Cancelled: Optional[bool] = False
+    TokenID: Optional[str] = None
+    AppointmentStatus: Optional[str] = None
+    name: str
+    phone: str
+    doctor: str
+    time_slot: Optional[str] = None
+    paid: bool
+    consultation_fee: Optional[float] = None
+    payment_method: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class PatientVisitReportsListResponse(BaseModel):
+    patient_id: int
+    facility_id: int
+    patient_name: str
+    total_visits: int
+    paid_visits: int
+    unpaid_visits: int
+    visits: List[PatientVisitReportResponse]
+    
+    class Config:
+        from_attributes = True
+
 # -------------------- Helper Functions --------------------
 
 def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointment_date: date, appointment_time: time):
@@ -821,6 +858,9 @@ def update_payment_status(
         if payment_request.payment_method:
             appt.payment_method = payment_request.payment_method
 
+        # Update payment status in appointment
+        appt.payment_status = payment_request.payment_status
+
         # Always mark appointment as completed when payment endpoint is executed
         appt.AppointmentStatus = "Completed"
         
@@ -844,7 +884,6 @@ def update_payment_status(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error updating payment status: {str(e)}")
-
 @router.patch("/{appointment_id}", response_model=AppointmentResponse)
 def update_appointment(
     appointment_id: int,
@@ -1184,3 +1223,114 @@ def get_doctor_schedule(
         "facility_id": facility_id,
         "schedules": schedule_data
     }
+
+
+
+# Patient visit reports endpoint
+@router.get("/patient/visit-reports", response_model=PatientVisitReportsListResponse)
+def get_patient_payment_reports(
+    patient_id: int = Query(..., description="Patient ID"),
+    facility_id: int = Query(..., description="Facility ID"),
+    limit: Optional[int] = Query(None, description="Limit number of visits (optional)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all visit reports for a patient to check payment status for previous visits
+    """
+    # Query to get all patient visits with payment information
+    query = (
+        db.query(
+            Appointment,
+            Patients.firstname.label('patient_firstname'),
+            Patients.lastname.label('patient_lastname'),
+            Patients.contact_number.label('patient_phone'),
+            Doctors.firstname.label('doctor_firstname'),
+            Doctors.lastname.label('doctor_lastname'),
+            Doctors.consultation_fee.label('doctor_consultation_fee')
+        )
+        .join(Patients, Appointment.PatientID == Patients.id)
+        .join(Doctors, Appointment.DoctorID == Doctors.id)
+        .filter(
+            Patients.id == patient_id,
+            Appointment.FacilityID == facility_id
+        )
+        .order_by(Appointment.AppointmentDate.desc(), Appointment.AppointmentTime.desc())
+    )
+    
+    # Apply limit if provided
+    if limit:
+        query = query.limit(limit)
+    
+    results = query.all()
+    
+    if not results:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No visits found for patient ID {patient_id} in facility {facility_id}"
+        )
+    
+    # Process all visit records
+    visits = []
+    patient_name = ""
+    paid_count = 0
+    unpaid_count = 0
+    
+    for result in results:
+        appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee = result
+        
+        # Set patient name from first record
+        if not patient_name:
+            patient_name = f"{patient_firstname} {patient_lastname}".strip()
+        
+        # Convert appointment mode to full name
+        appointment_mode_display = appointment.AppointmentMode
+        if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
+            appointment_mode_display = 'appointment'
+        elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
+            appointment_mode_display = 'walkin'
+        
+        # Check payment status from appointment table - true when payment_status is 1, false otherwise
+        is_paid = True if appointment.payment_status == 1 else False
+        if is_paid:
+            paid_count += 1
+        else:
+            unpaid_count += 1
+        
+        # Format visit data
+        visit_data = {
+            "AppointmentID": appointment.AppointmentID,
+            "PatientID": appointment.PatientID,
+            "DoctorID": appointment.DoctorID,
+            "FacilityID": appointment.FacilityID,
+            "DCID": appointment.DCID,
+            "AppointmentDate": appointment.AppointmentDate,
+            "AppointmentTime": appointment.AppointmentTime,
+            "Reason": appointment.Reason,
+            "AppointmentMode": appointment_mode_display,
+            "CheckinTime": appointment.CheckinTime,
+            "Cancelled": appointment.Cancelled,
+            "TokenID": appointment.TokenID,
+            "AppointmentStatus": appointment.AppointmentStatus,
+            "name": f"{patient_firstname} {patient_lastname}".strip(),
+            "phone": patient_phone,
+            "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
+            "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
+            "paid": is_paid,
+            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
+            "payment_method": appointment.payment_method
+        }
+        
+        visits.append(PatientVisitReportResponse(**visit_data))
+    
+    # Format the final response
+    response_data = {
+        "patient_id": patient_id,
+        "facility_id": facility_id,
+        "patient_name": patient_name,
+        "total_visits": len(visits),
+        "paid_visits": paid_count,
+        "unpaid_visits": unpaid_count,
+        "visits": visits
+    }
+    
+    return PatientVisitReportsListResponse(**response_data)

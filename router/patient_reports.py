@@ -371,7 +371,7 @@ async def get_patient_report_file(
 async def get_patient_reports(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
-    report_date: Date = Query(..., description="Report date (mandatory)"),
+    appointment_id: Optional[int] = Query(None, description="Appointment ID (optional)"),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
@@ -380,19 +380,24 @@ async def get_patient_reports(
     Mandatory parameters:
     - facility_id: Filter by facility ID
     - patient_id: Filter by patient ID
-    - report_date: Filter by report date
+    
+    Optional parameters:
+    - appointment_id: Filter by appointment ID
     
     Returns: JSON array of report records (excluding file binary data)
     """
     try:
-        # Query with only mandatory filters
+        # Query with mandatory filters
         query = db.query(model.PatientReports).filter(
             and_(
                 model.PatientReports.FACILITY_ID == facility_id,
-                model.PatientReports.PATIENT_ID == patient_id,
-                model.PatientReports.DATE == report_date
+                model.PatientReports.PATIENT_ID == patient_id
             )
         )
+        
+        # Add optional appointment_id filter if provided
+        if appointment_id is not None:
+            query = query.filter(model.PatientReports.APPOINTMENT_ID == appointment_id)
         
         # Order by upload_id (most recent first)
         query = query.order_by(model.PatientReports.UPLOAD_ID.desc())
