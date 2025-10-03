@@ -77,16 +77,16 @@ def parse_time_string(v) -> time:
     raise ValueError("AppointmentTime must be one of: 'HH:MM' (24-hour), 'HH:MM:SS', '9am'/'9pm', or '9:15am'/'2:05pm'")
 
 def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int, appointment_date: date, appointment_time: time):
-    """Enhanced version with proper facility_id handling - FIXED FIELD NAMES"""
+    """Enhanced version with proper facility_id handling - UPDATED FIELD NAMES"""
     try:
         day_of_week = appointment_date.strftime('%A')
         
         doctor_schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.Doctor_id == doctor_id,
-            model.DoctorSchedule.Facility_id == facility_id,
-            model.DoctorSchedule.WeekDay == day_of_week,
-            model.DoctorSchedule.Start_Date <= appointment_date,
-            model.DoctorSchedule.End_Date >= appointment_date
+            model.DoctorSchedule.doctor_id == doctor_id,
+            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.week_day == day_of_week,
+            model.DoctorSchedule.start_date <= appointment_date,
+            model.DoctorSchedule.end_date >= appointment_date
         ).all()
         
         if not doctor_schedules:
@@ -94,8 +94,8 @@ def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int
         
         available_windows = []
         for schedule in doctor_schedules:
-            start_time = schedule.Slot_Start_Time
-            end_time = schedule.Slot_End_Time
+            start_time = schedule.slot_start_time
+            end_time = schedule.slot_end_time
             
             if isinstance(start_time, str):
                 try:
@@ -109,10 +109,10 @@ def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int
                 except ValueError:
                     end_time = datetime.strptime(end_time, '%H:%M').time()
             
-            available_windows.append(f"Window {schedule.Window_Num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
+            available_windows.append(f"Window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
             
             if start_time <= appointment_time < end_time:
-                return True, f"Doctor is available in schedule window {schedule.Window_Num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}"
+                return True, f"Doctor is available in schedule window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}"
         
         return False, f"Doctor {doctor_id} not available at {appointment_time.strftime('%H:%M')} on {day_of_week} at facility {facility_id}. Available windows: {', '.join(available_windows)}"
         
@@ -192,7 +192,7 @@ def validate_appointment_constraints(db: Session, patient_id: int, doctor_id: in
     try:
         # Check for overlapping appointments (same patient, same date, same time)
         overlapping = db.query(model.Appointment).filter(
-            model.Appointment.PatientID == patient_id,
+            model.Appointment.patient_id == patient_id,
             model.Appointment.AppointmentDate == appointment_date,
             model.Appointment.AppointmentTime == appointment_time,
             model.Appointment.Cancelled == False
@@ -522,7 +522,7 @@ def dashboard_book_appointment(
             room_id=booking_data.room_id,
             payment_status=booking_data.payment_status,
             ABDM_ABHA_id=booking_data.patient_info.ABDM_ABHA_id,
-            FacilityID=facility_id
+            facility_id=facility_id
         )
         
         db.add(new_patient)
@@ -553,9 +553,9 @@ def dashboard_book_appointment(
             raise HTTPException(404, "Doctor not found")
         
         new_appointment = model.Appointment(
-            PatientID=patient_id,
-            DoctorID=booking_data.doctor_id,
-            FacilityID=facility_id,
+            patient_id=patient_id,
+            doctor_id=booking_data.doctor_id,
+            facility_id=facility_id,
             DCID=slot_dcid,
             AppointmentDate=booking_data.AppointmentDate,
             AppointmentTime=booking_data.AppointmentTime,
@@ -574,10 +574,10 @@ def dashboard_book_appointment(
         db.refresh(new_appointment)
         
         appointment_response = AppointmentResponse(
-            AppointmentID=new_appointment.AppointmentID,
-            patient_id=new_appointment.PatientID,
-            doctor_id=new_appointment.DoctorID,
-            facility_id=new_appointment.FacilityID,
+            AppointmentID=new_appointment.appointment_id,
+            patient_id=new_appointment.patient_id,
+            doctor_id=new_appointment.doctor_id,
+            facility_id=new_appointment.facility_id,
             DCID=new_appointment.DCID,
             AppointmentDate=new_appointment.AppointmentDate,
             AppointmentTime=new_appointment.AppointmentTime,
@@ -623,9 +623,9 @@ def dashboard_patient_lookup(
         
         query = db.query(model.Patients).filter(model.Patients.contact_number == clean_phone)
         if facility_id:
-            query = query.filter(model.Patients.FacilityID == facility_id)
+            query = query.filter(model.Patients.facility_id == facility_id)
         
-        patients = query.order_by(model.Patients.FacilityID, model.Patients.firstname, model.Patients.lastname).all()
+        patients = query.order_by(model.Patients.facility_id, model.Patients.firstname, model.Patients.lastname).all()
         
         if not patients:
             msg = f"No patients found with phone number {clean_phone}"
@@ -638,7 +638,7 @@ def dashboard_patient_lookup(
         for patient in patients:
             try:
                 recent_appointments = db.query(model.Appointment).filter(
-                    model.Appointment.PatientID == patient.id
+                    model.Appointment.patient_id == patient.id
                 ).order_by(model.Appointment.AppointmentDate.desc()).limit(10).all()
             except Exception:
                 recent_appointments = []
@@ -646,16 +646,16 @@ def dashboard_patient_lookup(
             appointment_history = []
             for apt in recent_appointments:
                 try:
-                    doctor = db.query(model.Doctors).filter(model.Doctors.id == apt.DoctorID).first()
+                    doctor = db.query(model.Doctors).filter(model.Doctors.id == apt.doctor_id).first()
                     doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}" if doctor else "Unknown Doctor"
                     
-                    facility = db.query(model.Facility).filter(model.Facility.FacilityID == apt.FacilityID).first()
-                    facility_name = facility.FacilityName if facility else f"Facility {apt.FacilityID}"
+                    facility = db.query(model.Facility).filter(model.Facility.facility_id == apt.facility_id).first()
+                    facility_name = facility.FacilityName if facility else f"Facility {apt.facility_id}"
                     
                     status = "Cancelled" if apt.Cancelled else (apt.AppointmentStatus or ("Checked In" if apt.CheckinTime else "Scheduled"))
                     
                     appointment_history.append({
-                        "appointment_id": apt.AppointmentID,
+                        "appointment_id": apt.appointment_id,
                         "date": apt.AppointmentDate.isoformat(),
                         "time": apt.AppointmentTime.strftime("%H:%M"),
                         "doctor": doctor_name,
@@ -686,7 +686,7 @@ def dashboard_patient_lookup(
                 email_id=getattr(patient, 'email_id', None),
                 disease=getattr(patient, 'disease', None),
                 ABDM_ABHA_id=getattr(patient, 'ABDM_ABHA_id', None),
-                facility_id=patient.FacilityID,
+                facility_id=patient.facility_id,
                 recent_appointments=appointment_history
             ))
         
@@ -700,7 +700,7 @@ def dashboard_patient_lookup(
         else:
             counts = {}
             for p in patients:
-                counts[p.FacilityID] = counts.get(p.FacilityID, 0) + 1
+                counts[p.facility_id] = counts.get(p.facility_id, 0) + 1
             if len(counts) > 1:
                 parts = [f"{cnt} in facility {fid}" for fid, cnt in counts.items()]
                 message += f" across facilities ({', '.join(parts)})"
@@ -762,7 +762,7 @@ def book_appointment_for_existing_patient(
         
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == booking_data.patient_id,
-            model.Patients.FacilityID == booking_data.facility_id
+            model.Patients.facility_id == booking_data.facility_id
         ).first()
         
         if not existing_patient:
@@ -799,9 +799,9 @@ def book_appointment_for_existing_patient(
             raise HTTPException(404, "Doctor not found")
         
         new_appointment = model.Appointment(
-            PatientID=booking_data.patient_id,
-            DoctorID=booking_data.doctor_id,
-            FacilityID=booking_data.facility_id,
+            patient_id=booking_data.patient_id,
+            doctor_id=booking_data.doctor_id,
+            facility_id=booking_data.facility_id,
             DCID=slot_dcid,
             AppointmentDate=booking_data.AppointmentDate,
             AppointmentTime=booking_data.AppointmentTime,
@@ -820,10 +820,10 @@ def book_appointment_for_existing_patient(
         db.refresh(new_appointment)
         
         appointment_response = AppointmentResponse(
-            AppointmentID=new_appointment.AppointmentID,
-            patient_id=new_appointment.PatientID,
-            doctor_id=new_appointment.DoctorID,
-            facility_id=new_appointment.FacilityID,
+            AppointmentID=new_appointment.appointment_id,
+            patient_id=new_appointment.patient_id,
+            doctor_id=new_appointment.doctor_id,
+            facility_id=new_appointment.facility_id,
             DCID=new_appointment.DCID,
             AppointmentDate=new_appointment.AppointmentDate,
             AppointmentTime=new_appointment.AppointmentTime,

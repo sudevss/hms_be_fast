@@ -14,7 +14,7 @@ class UserMasterBase(BaseModel):
     UserName: str
     Password: str
     Role: str
-    FacilityID: int
+    facility_id: int
 
 class UserMasterUpdate(BaseModel):
     UserName: Optional[str] = None
@@ -25,13 +25,13 @@ class UserMasterUpdate(BaseModel):
         validate_assignment = True
 
 class UserMasterResponse(UserMasterBase):
-    UserID: int
+    user_id: int
     class Config:
         orm_mode = True
 
 @router.get("/facility/{facility_id}", response_model=List[UserMasterResponse])
 def get_users_by_facility(facility_id: int, db: Session = Depends(get_db)):
-    return db.query(UserMaster).filter(UserMaster.FacilityID == facility_id).all()
+    return db.query(UserMaster).filter(UserMaster.facility_id == facility_id).all()
 
 @router.post("/", response_model=UserMasterResponse)
 def create_user(user: UserMasterBase, db: Session = Depends(get_db)):
@@ -44,8 +44,8 @@ def create_user(user: UserMasterBase, db: Session = Depends(get_db)):
 @router.put("/facility/{facility_id}/user/{user_id}", response_model=UserMasterResponse)
 def update_user_by_facility_and_user_id(facility_id: int, user_id: int, user: UserMasterUpdate, db: Session = Depends(get_db)):
     existing_user = db.query(UserMaster).filter(
-        UserMaster.FacilityID == facility_id,
-        UserMaster.UserID == user_id
+        UserMaster.facility_id == facility_id,
+        UserMaster.user_id == user_id
     ).first()
     
     if not existing_user:
@@ -65,7 +65,7 @@ def update_user_by_facility_and_user_id(facility_id: int, user_id: int, user: Us
         raise HTTPException(status_code=400, detail="No valid fields provided for update")
     
     # Update only the allowed fields (UserName, Password, Role)
-    # FacilityID is intentionally excluded to prevent moving users between facilities
+    # facility_id is intentionally excluded to prevent moving users between facilities
     for key, value in filtered_data.items():
         setattr(existing_user, key, value)
     
@@ -76,8 +76,8 @@ def update_user_by_facility_and_user_id(facility_id: int, user_id: int, user: Us
 @router.get("/facility/{facility_id}/user/{user_id}", response_model=UserMasterResponse)
 def get_user_by_facility_and_user_id(facility_id: int, user_id: int, db: Session = Depends(get_db)):
     user = db.query(UserMaster).filter(
-        UserMaster.FacilityID == facility_id,
-        UserMaster.UserID == user_id
+        UserMaster.facility_id == facility_id,
+        UserMaster.user_id == user_id
     ).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found in the specified facility")
@@ -87,8 +87,8 @@ def get_user_by_facility_and_user_id(facility_id: int, user_id: int, db: Session
 @router.delete("/facility/{facility_id}/user/{user_id}")
 def delete_user_by_facility_and_user_id(facility_id: int, user_id: int, db: Session = Depends(get_db)):
     user = db.query(UserMaster).filter(
-        UserMaster.FacilityID == facility_id,
-        UserMaster.UserID == user_id
+        UserMaster.facility_id == facility_id,
+        UserMaster.user_id == user_id
     ).first()
     
     if not user:

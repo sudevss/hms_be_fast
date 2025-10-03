@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
 from typing import List, Optional
-from datetime import date, datetime, time,timezone
+from datetime import date, datetime, time, timezone
 from pydantic import BaseModel, validator
 from model import Appointment, Patients, Doctors, DoctorSchedule, DoctorBookedSlots, PatientDiagnosis
 import pytz
 
 from database import get_db
-from  router.new_booking import update_slot_booking_status   # ✅ import the slot updater
+from router.new_booking import update_slot_booking_status
 
 router = APIRouter(
     prefix="/appointments",
@@ -18,19 +18,19 @@ router = APIRouter(
 # -------------------- Pydantic Models --------------------
 
 class AppointmentCreate(BaseModel):
-    PatientID: int
-    DoctorID: int
-    FacilityID: int
-    AppointmentDate: date
-    AppointmentTime: time
-    Reason: str
-    AppointmentMode: str
-    AppointmentStatus: Optional[str] = "Scheduled"
+    patient_id: int
+    doctor_id: int
+    facility_id: int
+    appointment_date: date
+    appointment_time: time
+    reason: str
+    appointment_mode: str
+    appointment_status: Optional[str] = "Scheduled"
 
-    @validator('AppointmentTime', pre=True)
+    @validator('appointment_time', pre=True)
     def parse_time(cls, v):
         if v is None:
-            raise ValueError("AppointmentTime is required")
+            raise ValueError("appointment_time is required")
         try:
             if isinstance(v, str):
                 v = v.rstrip('Z')
@@ -40,29 +40,27 @@ class AppointmentCreate(BaseModel):
             if isinstance(v, time):
                 return v.replace(second=0, microsecond=0)
         except Exception:
-            raise ValueError("Invalid format for AppointmentTime")
-        raise ValueError("Invalid format for AppointmentTime")
+            raise ValueError("Invalid format for appointment_time")
+        raise ValueError("Invalid format for appointment_time")
 
     class Config:
         from_attributes = True
 
 
 class AppointmentUpdate(BaseModel):
-    DoctorID: Optional[int] = None
-    AppointmentDate: Optional[date] = None
-    AppointmentTime: Optional[time] = None
-    Reason: Optional[str] = None
-    AppointmentMode: Optional[str] = None
-    AppointmentStatus: Optional[str] = None
+    doctor_id: Optional[int] = None
+    appointment_date: Optional[date] = None
+    appointment_time: Optional[time] = None
+    reason: Optional[str] = None
+    appointment_mode: Optional[str] = None
+    appointment_status: Optional[str] = None
 
-    @validator('AppointmentDate', pre=True)
+    @validator('appointment_date', pre=True)
     def validate_date(cls, v):
         if v is None:
             return v
         try:
-            # If it's a string, parse it
             if isinstance(v, str):
-                # Handle ISO format dates
                 if 'T' in v:
                     v = v.split('T')[0]
                 return datetime.strptime(v, '%Y-%m-%d').date()
@@ -74,47 +72,36 @@ class AppointmentUpdate(BaseModel):
             raise ValueError("Invalid date format. Use YYYY-MM-DD")
         return v
 
-    @validator('AppointmentTime', pre=True)
+    @validator('appointment_time', pre=True)
     def parse_time(cls, v):
         if v is None:
             return v
         
-        # If it's already a time object, return as is
         if isinstance(v, time):
             return v.replace(second=0, microsecond=0)
             
         try:
             if isinstance(v, str):
-                # Remove timezone info and parse
                 v = v.rstrip('Z')
                 
-                # Check if this looks like an auto-generated timestamp
-                # If it has microseconds or seconds, it's likely auto-generated
                 if '.' in v or (v.count(':') == 2 and not v.endswith(':00')):
-                    # This looks like an auto-generated timestamp
-                    # Instead of parsing it, return None to signal it should be ignored
                     return None
                 
-                # Handle various time formats
                 if 'T' in v:
-                    # Extract time part from datetime string
                     time_part = v.split('T')[1] if 'T' in v else v
                 else:
                     time_part = v
                 
-                # Parse different time formats
                 if '.' in time_part:
-                    # Handle microseconds - but this suggests auto-generation
                     time_part = time_part.split('.')[0]
                 
-                # Try parsing with different formats
                 try:
                     parsed_time = datetime.strptime(time_part, '%H:%M:%S').time()
                 except ValueError:
                     try:
                         parsed_time = datetime.strptime(time_part, '%H:%M').time()
                     except ValueError:
-                        return None  # Invalid format, ignore
+                        return None
                 
                 return parsed_time.replace(second=0, microsecond=0)
                 
@@ -122,7 +109,7 @@ class AppointmentUpdate(BaseModel):
                 return v.time().replace(second=0, microsecond=0)
                 
         except Exception:
-            return None  # On any parsing error, return None to ignore
+            return None
         
         return None
 
@@ -132,57 +119,56 @@ class AppointmentUpdate(BaseModel):
 
 
 class CheckinRequest(BaseModel):
-    pass  # No additional fields needed since FacilityID and AppointmentID come from query params
+    pass
 
 
 class CancelRequest(BaseModel):
-    reason: Optional[str] = None  # Optional cancellation reason
+    reason: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
 class PaymentRequest(BaseModel):
-    payment_status: bool = False  # Default to False instead of requiring it
-    payment_method: Optional[str] = None  # e.g., "cash", "card", "upi", etc.
+    payment_status: bool = False
+    payment_method: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
 class AppointmentResponse(BaseModel):
-    AppointmentID: int
-    PatientID: int
-    DoctorID: int
-    FacilityID: int
-    DCID: int
-    AppointmentDate: date
-    AppointmentTime: time
-    Reason: str
-    AppointmentMode: str
-    CheckinTime: Optional[datetime] = None
-    Cancelled: Optional[bool] = None
-    TokenID: Optional[str] = None
-    AppointmentStatus: Optional[str] = None
-    # New fields
-    name: Optional[str] = None  # Patient name
-    phone: Optional[str] = None  # Patient phone number
-    doctor: Optional[str] = None  # Doctor name
-    time_slot: Optional[str] = None  # Formatted time slot
-    paid: Optional[bool] = None  # Payment status
-    consultation_fee: Optional[float] = None  # Doctor's consultation fee
-    payment_method: Optional[str] = None  # Add this line
-    diagnosis_id: Optional[int] = None  # Add diagnosis ID
+    appointment_id: int
+    patient_id: int
+    doctor_id: int
+    facility_id: int
+    dcid: int
+    appointment_date: date
+    appointment_time: time
+    reason: str
+    appointment_mode: str
+    checkin_time: Optional[datetime] = None
+    cancelled: Optional[bool] = None
+    token_id: Optional[str] = None
+    appointment_status: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    doctor: Optional[str] = None
+    time_slot: Optional[str] = None
+    paid: Optional[bool] = None
+    consultation_fee: Optional[float] = None
+    payment_method: Optional[str] = None
+    diagnosis_id: Optional[int] = None
 
     class Config:
         from_attributes = True
 
 
 class CheckinResponse(BaseModel):
-    AppointmentID: int
-    TokenID: str
-    CheckinTime: datetime
-    AppointmentStatus: str
+    appointment_id: int
+    token_id: str
+    checkin_time: datetime
+    appointment_status: str
     message: str
 
     class Config:
@@ -190,9 +176,9 @@ class CheckinResponse(BaseModel):
 
 
 class CancelResponse(BaseModel):
-    AppointmentID: int
-    Cancelled: bool
-    AppointmentStatus: str
+    appointment_id: int
+    cancelled: bool
+    appointment_status: str
     message: str
 
     class Config:
@@ -200,10 +186,10 @@ class CancelResponse(BaseModel):
 
 
 class PaymentResponse(BaseModel):
-    AppointmentID: int
+    appointment_id: int
     payment_status: bool
     payment_method: Optional[str]
-    AppointmentStatus: str
+    appointment_status: str
     message: str
 
     class Config:
@@ -216,7 +202,6 @@ class HourlyData(BaseModel):
 
 
 class AppointmentSummary(BaseModel):
-    # totalSlots: int
     totalAppointments: int
     totalCheckin: int
     availableSlots: int
@@ -228,19 +213,19 @@ class AppointmentDetailsResponse(BaseModel):
     summary: AppointmentSummary
 
 class PatientVisitReportResponse(BaseModel):
-    AppointmentID: int
-    PatientID: int
-    DoctorID: int
-    FacilityID: int
-    DCID: Optional[int] = None
-    AppointmentDate: date
-    AppointmentTime: time
-    Reason: Optional[str] = None
-    AppointmentMode: Optional[str] = None
-    CheckinTime: Optional[datetime] = None
-    Cancelled: Optional[bool] = False
-    TokenID: Optional[str] = None
-    AppointmentStatus: Optional[str] = None
+    appointment_id: int
+    patient_id: int
+    doctor_id: int
+    facility_id: int
+    dcid: Optional[int] = None
+    appointment_date: date
+    appointment_time: time
+    reason: Optional[str] = None
+    appointment_mode: Optional[str] = None
+    checkin_time: Optional[datetime] = None
+    cancelled: Optional[bool] = False
+    token_id: Optional[str] = None
+    appointment_status: Optional[str] = None
     name: str
     phone: str
     doctor: str
@@ -271,7 +256,6 @@ def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointmen
     Find an available DCID from doctor_booked_slots for the given doctor, facility, date and time.
     Creates a new slot if none exists, or finds an unbooked slot.
     """
-    # First check if there's an existing unbooked slot for this time
     available_slot = (
         db.query(DoctorBookedSlots)
         .filter(
@@ -288,19 +272,18 @@ def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointmen
     if available_slot:
         return available_slot.DCID
     
-    # If no available slot, check if doctor has schedule for this time
-    weekday = appointment_date.strftime('%A')  # Get day name (Monday, Tuesday, etc.)
+    weekday = appointment_date.strftime('%A')
     
     schedule = (
         db.query(DoctorSchedule)
         .filter(
-            DoctorSchedule.Doctor_id == doctor_id,
-            DoctorSchedule.Facility_id == facility_id,
-            DoctorSchedule.Start_Date <= appointment_date,
-            DoctorSchedule.End_Date >= appointment_date,
-            DoctorSchedule.WeekDay == weekday,
-            DoctorSchedule.Slot_Start_Time <= appointment_time,
-            DoctorSchedule.Slot_End_Time > appointment_time
+            DoctorSchedule.doctor_id == doctor_id,
+            DoctorSchedule.facility_id == facility_id,
+            DoctorSchedule.start_date <= appointment_date,
+            DoctorSchedule.end_date >= appointment_date,
+            DoctorSchedule.week_day == weekday,
+            DoctorSchedule.slot_start_time <= appointment_time,
+            DoctorSchedule.slot_end_time > appointment_time
         )
         .first()
     )
@@ -311,18 +294,17 @@ def get_available_dcid(db: Session, doctor_id: int, facility_id: int, appointmen
             detail=f"Doctor is not available at {appointment_time} on {weekday}s"
         )
     
-    # Create a new booked slot
     new_slot = DoctorBookedSlots(
         Doctor_id=doctor_id,
         Facility_id=facility_id,
         Slot_date=appointment_date,
-        Start_Time=schedule.Slot_Start_Time,
-        End_Time=schedule.Slot_End_Time,
-        Booked_status='Not Booked'  # Will be set to 'Y' when appointment is created
+        Start_Time=schedule.slot_start_time,
+        End_Time=schedule.slot_end_time,
+        Booked_status='Not Booked'
     )
     
     db.add(new_slot)
-    db.flush()  # Get the DCID without committing
+    db.flush()
     
     return new_slot.DCID
 
@@ -336,13 +318,13 @@ def validate_doctor_availability(db: Session, doctor_id: int, facility_id: int, 
     schedule = (
         db.query(DoctorSchedule)
         .filter(
-            DoctorSchedule.Doctor_id == doctor_id,
-            DoctorSchedule.Facility_id == facility_id,
-            DoctorSchedule.Start_Date <= appointment_date,
-            DoctorSchedule.End_Date >= appointment_date,
-            DoctorSchedule.WeekDay == weekday,
-            DoctorSchedule.Slot_Start_Time <= appointment_time,
-            DoctorSchedule.Slot_End_Time > appointment_time
+            DoctorSchedule.doctor_id == doctor_id,
+            DoctorSchedule.facility_id == facility_id,
+            DoctorSchedule.start_date <= appointment_date,
+            DoctorSchedule.end_date >= appointment_date,
+            DoctorSchedule.week_day == weekday,
+            DoctorSchedule.slot_start_time <= appointment_time,
+            DoctorSchedule.slot_end_time > appointment_time
         )
         .first()
     )
@@ -353,14 +335,11 @@ def validate_doctor_availability(db: Session, doctor_id: int, facility_id: int, 
 
 @router.get("/", response_model=List[AppointmentResponse])
 def get_all_appointments(
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     date: date = Query(...),
-    appointment_status: Optional[str] = Query(None, alias="AppointmentStatus"),
-    # starts_from: int = Query(0, ge=0),
-    # max_results: int = Query(10, le=100),
+    appointment_status: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    # Modified query to include joins with Patients, Doctors, and PatientDiagnosis tables
     query = (
         db.query(
             Appointment,
@@ -370,51 +349,44 @@ def get_all_appointments(
             Doctors.firstname.label('doctor_firstname'),
             Doctors.lastname.label('doctor_lastname'),
             Doctors.consultation_fee.label('doctor_consultation_fee'),
-            PatientDiagnosis.DIAGNOSIS_ID.label('diagnosis_id')
+            PatientDiagnosis.diagnosis_id.label('diagnosis_id')
         )
-        .join(Patients, Appointment.PatientID == Patients.id)
-        .join(Doctors, Appointment.DoctorID == Doctors.id)
-        .outerjoin(PatientDiagnosis, Appointment.AppointmentID == PatientDiagnosis.APPOINTMENT_ID)
-        .filter(Appointment.FacilityID == facility_id)
+        .join(Patients, Appointment.patient_id == Patients.id)
+        .join(Doctors, Appointment.doctor_id == Doctors.id)
+        .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
+        .filter(Appointment.facility_id == facility_id)
         .filter(Appointment.AppointmentDate == date)
     )
     
-    # Apply filters based on appointment_status parameter
     if appointment_status:
         status_lower = appointment_status.lower()
         
         if status_lower == "scheduled":
-            # Show scheduled appointments (not checked in, not cancelled)
             query = query.filter(
                 Appointment.AppointmentStatus == "Scheduled",
                 Appointment.CheckinTime == None,
                 Appointment.Cancelled == False
             )
         elif status_lower == "waiting":
-            # Show waiting appointments (checked in but not completed, not cancelled)
             query = query.filter(
                 Appointment.AppointmentStatus == "Waiting",
                 Appointment.CheckinTime != None,
                 Appointment.Cancelled == False
             )
         elif status_lower == "completed":
-            # Show completed appointments (checked in and payment processed, not cancelled)
             query = query.filter(
                 Appointment.AppointmentStatus == "Completed",
                 Appointment.CheckinTime != None,
                 Appointment.Cancelled == False
             )
         elif status_lower == "cancelled":
-            # Show cancelled appointments
             query = query.filter(
                 Appointment.AppointmentStatus == "Cancelled",
                 Appointment.Cancelled == True
             )
         else:
-            # If an invalid status is provided, filter by the exact status string
             query = query.filter(Appointment.AppointmentStatus == appointment_status)
     else:
-        # Default behavior: show scheduled appointments when no status is specified
         query = query.filter(
             Appointment.AppointmentStatus == "Scheduled",
             Appointment.CheckinTime == None,
@@ -422,35 +394,29 @@ def get_all_appointments(
         )
     
     results = query.all()
-        # .offset(starts_from)
-        # .limit(max_results)
     
-    # Format the results to include the new fields
     formatted_results = []
     for appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id in results:
-        # Convert appointment mode to full name
         appointment_mode_display = appointment.AppointmentMode
         if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
             appointment_mode_display = 'appointment'
         elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
             appointment_mode_display = 'walkin'
         
-        # Create appointment dict from the appointment object
         appointment_dict = {
-            "AppointmentID": appointment.AppointmentID,
-            "PatientID": appointment.PatientID,
-            "DoctorID": appointment.DoctorID,
-            "FacilityID": appointment.FacilityID,
-            "DCID": appointment.DCID,
-            "AppointmentDate": appointment.AppointmentDate,
-            "AppointmentTime": appointment.AppointmentTime,
-            "Reason": appointment.Reason,
-            "AppointmentMode": appointment_mode_display,
-            "CheckinTime": appointment.CheckinTime,
-            "Cancelled": appointment.Cancelled,
-            "TokenID": appointment.TokenID,
-            "AppointmentStatus": appointment.AppointmentStatus,
-            # Add the new fields
+            "appointment_id": appointment.appointment_id,
+            "patient_id": appointment.patient_id,
+            "doctor_id": appointment.doctor_id,
+            "facility_id": appointment.facility_id,
+            "dcid": appointment.DCID,
+            "appointment_date": appointment.AppointmentDate,
+            "appointment_time": appointment.AppointmentTime,
+            "reason": appointment.Reason,
+            "appointment_mode": appointment_mode_display,
+            "checkin_time": appointment.CheckinTime,
+            "cancelled": appointment.Cancelled,
+            "token_id": appointment.TokenID,
+            "appointment_status": appointment.AppointmentStatus,
             "name": f"{patient_firstname} {patient_lastname}".strip(),
             "phone": patient_phone,
             "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
@@ -458,7 +424,7 @@ def get_all_appointments(
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
             "payment_method": appointment.payment_method,
-            "diagnosis_id": diagnosis_id  # Add diagnosis ID
+            "diagnosis_id": diagnosis_id
         }
         formatted_results.append(AppointmentResponse(**appointment_dict))
     
@@ -468,10 +434,9 @@ def get_all_appointments(
 @router.get("/{appointment_id}", response_model=AppointmentResponse)
 def get_appointment(
     appointment_id: int,
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
-    # Use the same join logic as get_all_appointments with PatientDiagnosis
     result = (
         db.query(
             Appointment,
@@ -481,14 +446,14 @@ def get_appointment(
             Doctors.firstname.label('doctor_firstname'),
             Doctors.lastname.label('doctor_lastname'),
             Doctors.consultation_fee.label('doctor_consultation_fee'),
-            PatientDiagnosis.DIAGNOSIS_ID.label('diagnosis_id')
+            PatientDiagnosis.diagnosis_id.label('diagnosis_id')
         )
-        .join(Patients, Appointment.PatientID == Patients.id)
-        .join(Doctors, Appointment.DoctorID == Doctors.id)
-        .outerjoin(PatientDiagnosis, Appointment.AppointmentID == PatientDiagnosis.APPOINTMENT_ID)
+        .join(Patients, Appointment.patient_id == Patients.id)
+        .join(Doctors, Appointment.doctor_id == Doctors.id)
+        .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
         .filter(
-            Appointment.AppointmentID == appointment_id,
-            Appointment.FacilityID == facility_id
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
         )
         .first()
     )
@@ -496,32 +461,28 @@ def get_appointment(
     if not result:
         raise HTTPException(status_code=404, detail="Appointment not found")
     
-    # Unpack the result
     appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id = result
     
-    # Convert appointment mode to full name
     appointment_mode_display = appointment.AppointmentMode
     if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
         appointment_mode_display = 'appointment'
     elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
         appointment_mode_display = 'walkin'
     
-    # Format the result to include the new fields
     appointment_dict = {
-        "AppointmentID": appointment.AppointmentID,
-        "PatientID": appointment.PatientID,
-        "DoctorID": appointment.DoctorID,
-        "FacilityID": appointment.FacilityID,
-        "DCID": appointment.DCID,
-        "AppointmentDate": appointment.AppointmentDate,
-        "AppointmentTime": appointment.AppointmentTime,
-        "Reason": appointment.Reason,
-        "AppointmentMode": appointment_mode_display,
-        "CheckinTime": appointment.CheckinTime,
-        "Cancelled": appointment.Cancelled,
-        "TokenID": appointment.TokenID,
-        "AppointmentStatus": appointment.AppointmentStatus,
-        # Add the new fields
+        "appointment_id": appointment.appointment_id,
+        "patient_id": appointment.patient_id,
+        "doctor_id": appointment.doctor_id,
+        "facility_id": appointment.facility_id,
+        "dcid": appointment.DCID,
+        "appointment_date": appointment.AppointmentDate,
+        "appointment_time": appointment.AppointmentTime,
+        "reason": appointment.Reason,
+        "appointment_mode": appointment_mode_display,
+        "checkin_time": appointment.CheckinTime,
+        "cancelled": appointment.Cancelled,
+        "token_id": appointment.TokenID,
+        "appointment_status": appointment.AppointmentStatus,
         "name": f"{patient_firstname} {patient_lastname}".strip(),
         "phone": patient_phone,
         "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
@@ -529,7 +490,7 @@ def get_appointment(
         "paid": True if appointment.payment_status == 1 else False,
         "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
         "payment_method": appointment.payment_method,
-        "diagnosis_id": diagnosis_id  # Add diagnosis ID
+        "diagnosis_id": diagnosis_id
     }
     
     return AppointmentResponse(**appointment_dict)
@@ -542,33 +503,30 @@ def create_appointment(
 ):
     payload = appointment.dict(exclude_unset=True)
 
-    # Set default values
     payload["Cancelled"] = False
     if "AppointmentStatus" not in payload:
         payload["AppointmentStatus"] = "Scheduled"
 
-    # Validate doctor availability using new schedule system
     if not validate_doctor_availability(
         db, 
-        payload["DoctorID"], 
-        payload["FacilityID"], 
-        payload["AppointmentDate"], 
-        payload["AppointmentTime"]
+        payload["doctor_id"], 
+        payload["facility_id"], 
+        payload["appointment_date"], 
+        payload["appointment_time"]
     ):
         raise HTTPException(
             status_code=400, 
             detail="Doctor is not available at the requested time"
         )
 
-    # Check for duplicate appointments
     exists = (
         db.query(Appointment)
         .filter(
-            Appointment.PatientID == payload["PatientID"],
-            Appointment.DoctorID == payload["DoctorID"],
-            Appointment.AppointmentDate == payload["AppointmentDate"],
-            Appointment.AppointmentTime == payload["AppointmentTime"],
-            Appointment.FacilityID == payload["FacilityID"]
+            Appointment.patient_id == payload["patient_id"],
+            Appointment.doctor_id == payload["doctor_id"],
+            Appointment.AppointmentDate == payload["appointment_date"],
+            Appointment.AppointmentTime == payload["appointment_time"],
+            Appointment.facility_id == payload["facility_id"]
         )
         .first()
     )
@@ -576,24 +534,21 @@ def create_appointment(
         raise HTTPException(400, "Duplicate appointment exists")
 
     try:
-        # Get or create DCID from the new booked slots system
         dcid = get_available_dcid(
             db, 
-            payload["DoctorID"], 
-            payload["FacilityID"], 
-            payload["AppointmentDate"], 
-            payload["AppointmentTime"]
+            payload["doctor_id"], 
+            payload["facility_id"], 
+            payload["appointment_date"], 
+            payload["appointment_time"]
         )
         payload["DCID"] = dcid
 
-        # TokenID and CheckinTime will be generated during checkin, not during creation
         payload["TokenID"] = None
         payload["CheckinTime"] = None
 
         new_appt = Appointment(**payload)
         db.add(new_appt)
         
-        # Mark the slot as booked
         booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == dcid).first()
         if booked_slot:
             booked_slot.Booked_status = 'Booked'
@@ -601,7 +556,6 @@ def create_appointment(
         db.commit()
         db.refresh(new_appt)
         
-        # Fetch the created appointment with joined data (same logic as get_appointment)
         result = (
             db.query(
                 Appointment,
@@ -611,44 +565,41 @@ def create_appointment(
                 Doctors.firstname.label('doctor_firstname'),
                 Doctors.lastname.label('doctor_lastname'),
                 Doctors.consultation_fee.label('doctor_consultation_fee'),
-                PatientDiagnosis.DIAGNOSIS_ID.label('diagnosis_id')
+                PatientDiagnosis.diagnosis_id.label('diagnosis_id')
             )
-            .join(Patients, Appointment.PatientID == Patients.id)
-            .join(Doctors, Appointment.DoctorID == Doctors.id)
-            .outerjoin(PatientDiagnosis, Appointment.AppointmentID == PatientDiagnosis.APPOINTMENT_ID)
-            .filter(Appointment.AppointmentID == new_appt.AppointmentID)
+            .join(Patients, Appointment.patient_id == Patients.id)
+            .join(Doctors, Appointment.doctor_id == Doctors.id)
+            .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
+            .filter(Appointment.appointment_id == new_appt.appointment_id)
             .first()
         )
         
         if not result:
             raise HTTPException(status_code=500, detail="Failed to fetch created appointment")
         
-        # Unpack the result
         appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id = result
         
-        # Format the result to include the new fields
         appointment_dict = {
-            "AppointmentID": appointment.AppointmentID,
-            "PatientID": appointment.PatientID,
-            "DoctorID": appointment.DoctorID,
-            "FacilityID": appointment.FacilityID,
-            "DCID": appointment.DCID,
-            "AppointmentDate": appointment.AppointmentDate,
-            "AppointmentTime": appointment.AppointmentTime,
-            "Reason": appointment.Reason,
-            "AppointmentMode": appointment.AppointmentMode,
-            "CheckinTime": appointment.CheckinTime,
-            "Cancelled": appointment.Cancelled,
-            "TokenID": appointment.TokenID,
-            "AppointmentStatus": appointment.AppointmentStatus,
-            # Add the new fields
+            "appointment_id": appointment.appointment_id,
+            "patient_id": appointment.patient_id,
+            "doctor_id": appointment.doctor_id,
+            "facility_id": appointment.facility_id,
+            "dcid": appointment.DCID,
+            "appointment_date": appointment.AppointmentDate,
+            "appointment_time": appointment.AppointmentTime,
+            "reason": appointment.Reason,
+            "appointment_mode": appointment.AppointmentMode,
+            "checkin_time": appointment.CheckinTime,
+            "cancelled": appointment.Cancelled,
+            "token_id": appointment.TokenID,
+            "appointment_status": appointment.AppointmentStatus,
             "name": f"{patient_firstname} {patient_lastname}".strip(),
             "phone": patient_phone,
             "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
             "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
-            "diagnosis_id": diagnosis_id  # Add diagnosis ID
+            "diagnosis_id": diagnosis_id
         }
         
         return AppointmentResponse(**appointment_dict)
@@ -661,19 +612,14 @@ def create_appointment(
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
-    """
-    This version requires database schema change to allow TokenID uniqueness 
-    per facility per day instead of global uniqueness
-    """
-    # Find the appointment
     appt = (
         db.query(Appointment)
         .filter(
-            Appointment.AppointmentID == appointment_id,
-            Appointment.FacilityID == facility_id
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
         )
         .first()
     )
@@ -681,55 +627,45 @@ def checkin_appointment(
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
     
-    # Check if already checked in
     if appt.CheckinTime is not None:
         raise HTTPException(status_code=400, detail="Appointment already checked in")
     
-    # Check if appointment is cancelled
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Cannot checkin cancelled appointment")
     
     try:
-        # Generate TokenID based on appointment mode
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         prefix = "A" if mode == "a" else "W" if mode == "w" else "X"
         
-        # Get current times
         utc_now = datetime.now(timezone.utc)
-        local_tz = pytz.timezone('Asia/Kolkata')  # Indian Standard Time
+        local_tz = pytz.timezone('Asia/Kolkata')
         local_now = utc_now.astimezone(local_tz)
         
-        # Use local date for token counting (this ensures tokens are consistent with user's day)
         today = local_now.date()
         
-        # Count existing tokens with the same prefix checked in TODAY at THIS FACILITY
-        # Since you have AppointmentDate field, we can use that for more accurate token counting
         count = (
-            db.query(func.count(Appointment.AppointmentID))
+            db.query(func.count(Appointment.appointment_id))
             .filter(
-                Appointment.FacilityID == facility_id,
+                Appointment.facility_id == facility_id,
                 Appointment.TokenID.like(f"{prefix}%"),
                 Appointment.TokenID.isnot(None),
-                Appointment.AppointmentDate == today  # Use AppointmentDate from your model
+                Appointment.AppointmentDate == today
             )
             .scalar() or 0
         )
         
-        # Generate simple token
         token_id = f"{prefix}{count + 1}"
         
-        # Handle race conditions - check against your unique constraint
         max_retries = 5
         for attempt in range(max_retries):
             test_token = f"{prefix}{count + 1 + attempt}"
             
-            # Check if this token exists today at this facility (respecting your unique constraint)
             existing = (
                 db.query(Appointment)
                 .filter(
                     Appointment.TokenID == test_token,
-                    Appointment.FacilityID == facility_id,
-                    Appointment.AppointmentDate == today  # This matches your unique constraint
+                    Appointment.facility_id == facility_id,
+                    Appointment.AppointmentDate == today
                 )
                 .first()
             )
@@ -738,19 +674,17 @@ def checkin_appointment(
                 token_id = test_token
                 break
         
-        # Store UTC time in database (for consistency across servers)
         appt.TokenID = token_id
         appt.CheckinTime = utc_now
         appt.AppointmentStatus = "Waiting"
         db.commit()
         db.refresh(appt)
         
-        # Return local time in response (what user expects to see)
         return CheckinResponse(
-            AppointmentID=appt.AppointmentID,
-            TokenID=token_id,
-            CheckinTime=local_now.replace(tzinfo=None),  # Remove timezone info, keep local time
-            AppointmentStatus="Waiting",
+            appointment_id=appt.appointment_id,
+            token_id=token_id,
+            checkin_time=local_now.replace(tzinfo=None),
+            appointment_status="Waiting",
             message="Patient checked in successfully"
         )
         
@@ -763,19 +697,14 @@ def checkin_appointment(
 def cancel_appointment(
     appointment_id: int,
     cancel_request: CancelRequest = CancelRequest(),
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Cancel an appointment by setting Cancelled=True and updating status.
-    Also frees up the booked slot.
-    """
-    # Find the appointment
     appt = (
         db.query(Appointment)
         .filter(
-            Appointment.AppointmentID == appointment_id,
-            Appointment.FacilityID == facility_id
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
         )
         .first()
     )
@@ -783,35 +712,28 @@ def cancel_appointment(
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    # Check if already cancelled
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Appointment is already cancelled")
 
-    # Check if already checked in
     if appt.CheckinTime is not None:
         raise HTTPException(status_code=400, detail="Cannot cancel checked-in appointment")
 
     try:
-        # Update appointment to cancelled status
         appt.Cancelled = True
         appt.AppointmentStatus = "Cancelled"
 
-        # Free up the booked slot
         if appt.DCID:
             success, error = update_slot_booking_status(db, appt.DCID, status="Not Booked")
             if not success:
                 raise HTTPException(status_code=500, detail=f"Failed to free slot: {error}")
 
-        # Optionally store cancellation reason if your model supports it
-        # appt.CancellationReason = cancel_request.reason
-
         db.commit()
         db.refresh(appt)
 
         return CancelResponse(
-            AppointmentID=appt.AppointmentID,
-            Cancelled=True,
-            AppointmentStatus="Cancelled",
+            appointment_id=appt.appointment_id,
+            cancelled=True,
+            appointment_status="Cancelled",
             message="Appointment cancelled successfully"
         )
 
@@ -820,26 +742,18 @@ def cancel_appointment(
         raise HTTPException(status_code=500, detail=f"Error cancelling appointment: {str(e)}")
 
 
-
-
-
-# Updated payment endpoint logic
 @router.post("/{appointment_id}/payment", response_model=PaymentResponse)
 def update_payment_status(
     appointment_id: int,
     payment_request: PaymentRequest,
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Update payment status for an appointment and mark as completed regardless of payment status.
-    """
-    # Find the appointment
     appt = (
         db.query(Appointment)
         .filter(
-            Appointment.AppointmentID == appointment_id,
-            Appointment.FacilityID == facility_id
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
         )
         .first()
     )
@@ -847,31 +761,24 @@ def update_payment_status(
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
     
-    # Check if appointment is checked in
     if appt.CheckinTime is None:
         raise HTTPException(status_code=400, detail="Patient must be checked in before payment")
     
-    # Check if appointment is cancelled
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Cannot process payment for cancelled appointment")
 
     try:
-        # Update payment status in the Patient table
-        patient = db.query(Patients).filter(Patients.id == appt.PatientID).first()
+        patient = db.query(Patients).filter(Patients.id == appt.patient_id).first()
         if patient:
             patient.is_paid = payment_request.payment_status
 
-        # Update payment method in appointment if provided
         if payment_request.payment_method:
             appt.payment_method = payment_request.payment_method
 
-        # Update payment status in appointment
         appt.payment_status = payment_request.payment_status
 
-        # Always mark appointment as completed when payment endpoint is executed
         appt.AppointmentStatus = "Completed"
         
-        # Set appropriate message based on payment status
         if payment_request.payment_status:
             message = "Payment processed successfully. Appointment completed."
         else:
@@ -881,10 +788,10 @@ def update_payment_status(
         db.refresh(appt)
 
         return PaymentResponse(
-            AppointmentID=appt.AppointmentID,
+            appointment_id=appt.appointment_id,
             payment_status=payment_request.payment_status,
             payment_method=payment_request.payment_method,
-            AppointmentStatus=appt.AppointmentStatus,
+            appointment_status=appt.AppointmentStatus,
             message=message
         )
 
@@ -897,95 +804,76 @@ def update_payment_status(
 def update_appointment(
     appointment_id: int,
     updated: AppointmentUpdate,
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
     appt = (
         db.query(Appointment)
         .filter(
-            Appointment.AppointmentID == appointment_id,
-            Appointment.FacilityID == facility_id
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
         )
         .first()
     )
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    # Get the raw request data
     update_data = updated.dict(exclude_unset=True, exclude_none=True)
 
-    # Very strict filtering - only update fields that are explicitly set with valid values
     filtered_data = {}
     current_time = datetime.now().time()
     current_date = date.today()
     
     for k, v in update_data.items():
-        # Skip if value is None
         if v is None:
             continue
         
-        # Skip string fields with placeholder values
         if isinstance(v, str) and (v.strip() == "" or v.lower() == "string"):
             continue
         
-        # Skip integer fields with value 0 - these are likely defaults from frontend
         if isinstance(v, int) and v == 0:
             continue
         
-        # Skip empty lists
         if isinstance(v, list) and len(v) == 0:
             continue
         
-        # Special handling for AppointmentDate
-        if k == "AppointmentDate" and isinstance(v, date):
+        if k == "appointment_date" and isinstance(v, date):
             current_db_date = getattr(appt, k)
-            # Skip if it's the same as current DB value OR if it's today's date (likely default)
             if current_db_date == v or v == current_date:
                 continue
         
-        # Special handling for AppointmentTime - be very strict
-        if k == "AppointmentTime":
-            # If the validator returned None (indicating auto-generated timestamp), skip
+        if k == "appointment_time":
             if v is None:
                 continue
                 
             if isinstance(v, time):
                 current_db_time = getattr(appt, k)
                 
-                # Skip if it's the same as current DB value
                 current_time_normalized = current_db_time.replace(second=0, microsecond=0)
                 new_time_normalized = v.replace(second=0, microsecond=0)
                 if current_time_normalized == new_time_normalized:
                     continue
                 
-                # Skip if the time looks like it's generated automatically
-                # Check if it's very close to current time (within 5 minutes) - likely auto-generated
                 current_system_time = datetime.now().time()
                 current_system_minutes = current_system_time.hour * 60 + current_system_time.minute
                 new_time_minutes = v.hour * 60 + v.minute
                 
-                # If the time is within 5 minutes of current system time, it's likely auto-generated
                 if abs(current_system_minutes - new_time_minutes) <= 5:
                     continue
                 
-                # Additional check: Skip if it's not a "round" time (like 08:30, 14:00, etc.)
-                # User-set times are usually round numbers, auto-generated ones are not
-                if v.minute % 5 != 0:  # Not a 5-minute interval
+                if v.minute % 5 != 0:
                     continue
             else:
-                continue  # Not a time object, skip
+                continue
         
-        # For AppointmentMode, skip "string" or single character defaults
-        if k == "AppointmentMode" and isinstance(v, str):
+        if k == "appointment_mode" and isinstance(v, str):
             if v.lower() == "string" or len(v.strip()) == 0:
                 continue
         
-        # For AppointmentStatus, skip "string" default
-        if k == "AppointmentStatus" and isinstance(v, str):
+        if k == "appointment_status" and isinstance(v, str):
             if v.lower() == "string":
                 continue
         
-        # For other fields, only update if the value is actually different from current
         current_value = getattr(appt, k, None)
         if current_value == v:
             continue
@@ -995,15 +883,13 @@ def update_appointment(
     if not filtered_data:
         raise HTTPException(status_code=400, detail="No valid fields provided for update")
 
-    # Handle doctor/time/date changes - need to update DCID and slot booking
-    needs_slot_update = any(k in filtered_data for k in ['DoctorID', 'AppointmentDate', 'AppointmentTime'])
+    needs_slot_update = any(k in filtered_data for k in ['doctor_id', 'appointment_date', 'appointment_time'])
     old_dcid = appt.DCID if needs_slot_update else None
 
-    # Validate new doctor availability if doctor/time/date is being changed
     if needs_slot_update:
-        new_doctor_id = filtered_data.get('DoctorID', appt.DoctorID)
-        new_date = filtered_data.get('AppointmentDate', appt.AppointmentDate)
-        new_time = filtered_data.get('AppointmentTime', appt.AppointmentTime)
+        new_doctor_id = filtered_data.get('doctor_id', appt.doctor_id)
+        new_date = filtered_data.get('appointment_date', appt.AppointmentDate)
+        new_time = filtered_data.get('appointment_time', appt.AppointmentTime)
         
         if not validate_doctor_availability(db, new_doctor_id, facility_id, new_date, new_time):
             raise HTTPException(
@@ -1011,24 +897,19 @@ def update_appointment(
                 detail="Doctor is not available at the requested time"
             )
         
-        # Get new DCID
         new_dcid = get_available_dcid(db, new_doctor_id, facility_id, new_date, new_time)
         filtered_data['DCID'] = new_dcid
 
-    # Apply updates
     for field_name, new_value in filtered_data.items():
         setattr(appt, field_name, new_value)
 
     try:
-        # Handle slot booking changes
         if needs_slot_update:
-            # Free up old slot
             if old_dcid:
                 old_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == old_dcid).first()
                 if old_slot:
                     old_slot.Booked_status = 'Not Booked'
             
-            # Book new slot
             new_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == filtered_data['DCID']).first()
             if new_slot:
                 new_slot.Booked_status = 'Booked'
@@ -1036,7 +917,6 @@ def update_appointment(
         db.commit()
         db.refresh(appt)
         
-        # Fetch the updated appointment with joined data including diagnosis
         result = (
             db.query(
                 Appointment,
@@ -1046,14 +926,14 @@ def update_appointment(
                 Doctors.firstname.label('doctor_firstname'),
                 Doctors.lastname.label('doctor_lastname'),
                 Doctors.consultation_fee.label('doctor_consultation_fee'),
-                PatientDiagnosis.DIAGNOSIS_ID.label('diagnosis_id')
+                PatientDiagnosis.diagnosis_id.label('diagnosis_id')
             )
-            .join(Patients, Appointment.PatientID == Patients.id)
-            .join(Doctors, Appointment.DoctorID == Doctors.id)
-            .outerjoin(PatientDiagnosis, Appointment.AppointmentID == PatientDiagnosis.APPOINTMENT_ID)
+            .join(Patients, Appointment.patient_id == Patients.id)
+            .join(Doctors, Appointment.doctor_id == Doctors.id)
+            .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
             .filter(
-                Appointment.AppointmentID == appointment_id,
-                Appointment.FacilityID == facility_id
+                Appointment.appointment_id == appointment_id,
+                Appointment.facility_id == facility_id
             )
             .first()
         )
@@ -1061,32 +941,29 @@ def update_appointment(
         if not result:
             raise HTTPException(status_code=404, detail="Updated appointment not found")
         
-        # Unpack the result
         appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id = result
         
-        # Format the result to include the new fields
         appointment_dict = {
-            "AppointmentID": appointment.AppointmentID,
-            "PatientID": appointment.PatientID,
-            "DoctorID": appointment.DoctorID,
-            "FacilityID": appointment.FacilityID,
-            "DCID": appointment.DCID,
-            "AppointmentDate": appointment.AppointmentDate,
-            "AppointmentTime": appointment.AppointmentTime,
-            "Reason": appointment.Reason,
-            "AppointmentMode": appointment.AppointmentMode,
-            "CheckinTime": appointment.CheckinTime,
-            "Cancelled": appointment.Cancelled,
-            "TokenID": appointment.TokenID,
-            "AppointmentStatus": appointment.AppointmentStatus,
-            # Add the new fields
+            "appointment_id": appointment.appointment_id,
+            "patient_id": appointment.patient_id,
+            "doctor_id": appointment.doctor_id,
+            "facility_id": appointment.facility_id,
+            "dcid": appointment.DCID,
+            "appointment_date": appointment.AppointmentDate,
+            "appointment_time": appointment.AppointmentTime,
+            "reason": appointment.Reason,
+            "appointment_mode": appointment.AppointmentMode,
+            "checkin_time": appointment.CheckinTime,
+            "cancelled": appointment.Cancelled,
+            "token_id": appointment.TokenID,
+            "appointment_status": appointment.AppointmentStatus,
             "name": f"{patient_firstname} {patient_lastname}".strip(),
             "phone": patient_phone,
             "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
             "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
-            "diagnosis_id": diagnosis_id  # Add diagnosis ID
+            "diagnosis_id": diagnosis_id
         }
         
         return AppointmentResponse(**appointment_dict)
@@ -1099,14 +976,14 @@ def update_appointment(
 @router.delete("/{appointment_id}")
 def delete_appointment(
     appointment_id: int,
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
     appt = (
         db.query(Appointment)
         .filter(
-            Appointment.AppointmentID == appointment_id,
-            Appointment.FacilityID == facility_id
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
         )
         .first()
     )
@@ -1114,11 +991,10 @@ def delete_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
     
     try:
-        # Free up the booked slot before deleting
         if appt.DCID:
             booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == appt.DCID).first()
             if booked_slot:
-                booked_slot.Booked_status = 'Not Booked'  # Changed from 'N' to 'Not Booked'
+                booked_slot.Booked_status = 'Not Booked'
         
         db.delete(appt)
         db.commit()
@@ -1129,26 +1005,21 @@ def delete_appointment(
         raise HTTPException(status_code=500, detail=f"Error deleting appointment: {str(e)}")
 
 
-# -------------------- Additional Endpoints for New Schedule System --------------------
-
 @router.get("/doctor-schedule/")
 def get_doctor_schedule(
     doctor_id: int = Query(...),
-    facility_id: int = Query(..., alias="facility_id"),
+    facility_id: int = Query(...),
     start_date: date = Query(...),
     end_date: date = Query(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Get doctor's schedule for a date range.
-    """
     schedules = (
         db.query(DoctorSchedule)
         .filter(
-            DoctorSchedule.Doctor_id == doctor_id,
-            DoctorSchedule.Facility_id == facility_id,
-            DoctorSchedule.Start_Date <= end_date,
-            DoctorSchedule.End_Date >= start_date
+            DoctorSchedule.doctor_id == doctor_id,
+            DoctorSchedule.facility_id == facility_id,
+            DoctorSchedule.start_date <= end_date,
+            DoctorSchedule.end_date >= start_date
         )
         .all()
     )
@@ -1156,13 +1027,13 @@ def get_doctor_schedule(
     schedule_data = []
     for schedule in schedules:
         schedule_data.append({
-            "weekday": schedule.WeekDay,
-            "window_num": schedule.Window_Num,
-            "start_time": schedule.Slot_Start_Time.strftime("%H:%M"),
-            "end_time": schedule.Slot_End_Time.strftime("%H:%M"),
+            "weekday": schedule.week_day,
+            "window_num": schedule.window_num,
+            "start_time": schedule.slot_start_time.strftime("%H:%M"),
+            "end_time": schedule.slot_end_time.strftime("%H:%M"),
             "schedule_period": {
-                "start_date": schedule.Start_Date.strftime("%Y-%m-%d"),
-                "end_date": schedule.End_Date.strftime("%Y-%m-%d")
+                "start_date": schedule.start_date.strftime("%Y-%m-%d"),
+                "end_date": schedule.end_date.strftime("%Y-%m-%d")
             }
         })
     
@@ -1173,7 +1044,6 @@ def get_doctor_schedule(
     }
 
 
-# Patient visit reports endpoint
 @router.get("/patient/visit-reports", response_model=PatientVisitReportsListResponse)
 def get_patient_payment_reports(
     patient_id: int = Query(..., description="Patient ID"),
@@ -1181,10 +1051,6 @@ def get_patient_payment_reports(
     limit: Optional[int] = Query(None, description="Limit number of visits (optional)"),
     db: Session = Depends(get_db)
 ):
-    """
-    Get all visit reports for a patient to check payment status for previous visits
-    """
-    # Query to get all patient visits with payment information
     query = (
         db.query(
             Appointment,
@@ -1195,16 +1061,15 @@ def get_patient_payment_reports(
             Doctors.lastname.label('doctor_lastname'),
             Doctors.consultation_fee.label('doctor_consultation_fee')
         )
-        .join(Patients, Appointment.PatientID == Patients.id)
-        .join(Doctors, Appointment.DoctorID == Doctors.id)
+        .join(Patients, Appointment.patient_id == Patients.id)
+        .join(Doctors, Appointment.doctor_id == Doctors.id)
         .filter(
             Patients.id == patient_id,
-            Appointment.FacilityID == facility_id
+            Appointment.facility_id == facility_id
         )
         .order_by(Appointment.AppointmentDate.desc(), Appointment.AppointmentTime.desc())
     )
     
-    # Apply limit if provided
     if limit:
         query = query.limit(limit)
     
@@ -1216,7 +1081,6 @@ def get_patient_payment_reports(
             detail=f"No visits found for patient ID {patient_id} in facility {facility_id}"
         )
     
-    # Process all visit records
     visits = []
     patient_name = ""
     paid_count = 0
@@ -1225,39 +1089,35 @@ def get_patient_payment_reports(
     for result in results:
         appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee = result
         
-        # Set patient name from first record
         if not patient_name:
             patient_name = f"{patient_firstname} {patient_lastname}".strip()
         
-        # Convert appointment mode to full name
         appointment_mode_display = appointment.AppointmentMode
         if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
             appointment_mode_display = 'appointment'
         elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
             appointment_mode_display = 'walkin'
         
-        # Check payment status from appointment table - true when payment_status is 1, false otherwise
         is_paid = True if appointment.payment_status == 1 else False
         if is_paid:
             paid_count += 1
         else:
             unpaid_count += 1
         
-        # Format visit data
         visit_data = {
-            "AppointmentID": appointment.AppointmentID,
-            "PatientID": appointment.PatientID,
-            "DoctorID": appointment.DoctorID,
-            "FacilityID": appointment.FacilityID,
-            "DCID": appointment.DCID,
-            "AppointmentDate": appointment.AppointmentDate,
-            "AppointmentTime": appointment.AppointmentTime,
-            "Reason": appointment.Reason,
-            "AppointmentMode": appointment_mode_display,
-            "CheckinTime": appointment.CheckinTime,
-            "Cancelled": appointment.Cancelled,
-            "TokenID": appointment.TokenID,
-            "AppointmentStatus": appointment.AppointmentStatus,
+            "appointment_id": appointment.appointment_id,
+            "patient_id": appointment.patient_id,
+            "doctor_id": appointment.doctor_id,
+            "facility_id": appointment.facility_id,
+            "dcid": appointment.DCID,
+            "appointment_date": appointment.AppointmentDate,
+            "appointment_time": appointment.AppointmentTime,
+            "reason": appointment.Reason,
+            "appointment_mode": appointment_mode_display,
+            "checkin_time": appointment.CheckinTime,
+            "cancelled": appointment.Cancelled,
+            "token_id": appointment.TokenID,
+            "appointment_status": appointment.AppointmentStatus,
             "name": f"{patient_firstname} {patient_lastname}".strip(),
             "phone": patient_phone,
             "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
@@ -1269,7 +1129,6 @@ def get_patient_payment_reports(
         
         visits.append(PatientVisitReportResponse(**visit_data))
     
-    # Format the final response
     response_data = {
         "patient_id": patient_id,
         "facility_id": facility_id,
@@ -1283,18 +1142,13 @@ def get_patient_payment_reports(
     return PatientVisitReportsListResponse(**response_data)
 
 
-
 @router.get("/patient/{patient_id}", response_model=List[AppointmentResponse])
 def get_patient_appointments(
     patient_id: int,
-    facility_id: int = Query(..., alias="facility_id"),
-    appointment_status: Optional[str] = Query(None, alias="AppointmentStatus"),
+    facility_id: int = Query(...),
+    appointment_status: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Get all appointments for a specific patient without date filtering.
-    """
-    # Base query with joins to get patient, doctor, and diagnosis information
     query = (
         db.query(
             Appointment,
@@ -1304,18 +1158,17 @@ def get_patient_appointments(
             Doctors.firstname.label('doctor_firstname'),
             Doctors.lastname.label('doctor_lastname'),
             Doctors.consultation_fee.label('doctor_consultation_fee'),
-            PatientDiagnosis.DIAGNOSIS_ID.label('diagnosis_id')
+            PatientDiagnosis.diagnosis_id.label('diagnosis_id')
         )
-        .join(Patients, Appointment.PatientID == Patients.id)
-        .join(Doctors, Appointment.DoctorID == Doctors.id)
-        .outerjoin(PatientDiagnosis, Appointment.AppointmentID == PatientDiagnosis.APPOINTMENT_ID)
+        .join(Patients, Appointment.patient_id == Patients.id)
+        .join(Doctors, Appointment.doctor_id == Doctors.id)
+        .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
         .filter(
-            Appointment.PatientID == patient_id,
-            Appointment.FacilityID == facility_id
+            Appointment.patient_id == patient_id,
+            Appointment.facility_id == facility_id
         )
     )
     
-    # Apply optional appointment status filter
     if appointment_status:
         status_lower = appointment_status.lower()
         
@@ -1343,10 +1196,8 @@ def get_patient_appointments(
                 Appointment.Cancelled == True
             )
         else:
-            # If an invalid status is provided, filter by the exact status string
             query = query.filter(Appointment.AppointmentStatus == appointment_status)
     
-    # Order by appointment date and time (most recent first)
     query = query.order_by(Appointment.AppointmentDate.desc(), Appointment.AppointmentTime.desc())
     
     results = query.all()
@@ -1357,32 +1208,28 @@ def get_patient_appointments(
             detail=f"No appointments found for patient ID {patient_id} in facility {facility_id}"
         )
     
-    # Format the results to include the new fields
     formatted_results = []
     for appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id in results:
-        # Convert appointment mode to full name
         appointment_mode_display = appointment.AppointmentMode
         if appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'a':
             appointment_mode_display = 'appointment'
         elif appointment.AppointmentMode and appointment.AppointmentMode.lower() == 'w':
             appointment_mode_display = 'walkin'
         
-        # Create appointment dict from the appointment object
         appointment_dict = {
-            "AppointmentID": appointment.AppointmentID,
-            "PatientID": appointment.PatientID,
-            "DoctorID": appointment.DoctorID,
-            "FacilityID": appointment.FacilityID,
-            "DCID": appointment.DCID,
-            "AppointmentDate": appointment.AppointmentDate,
-            "AppointmentTime": appointment.AppointmentTime,
-            "Reason": appointment.Reason,
-            "AppointmentMode": appointment_mode_display,
-            "CheckinTime": appointment.CheckinTime,
-            "Cancelled": appointment.Cancelled,
-            "TokenID": appointment.TokenID,
-            "AppointmentStatus": appointment.AppointmentStatus,
-            # Add the new fields
+            "appointment_id": appointment.appointment_id,
+            "patient_id": appointment.patient_id,
+            "doctor_id": appointment.doctor_id,
+            "facility_id": appointment.facility_id,
+            "dcid": appointment.DCID,
+            "appointment_date": appointment.AppointmentDate,
+            "appointment_time": appointment.AppointmentTime,
+            "reason": appointment.Reason,
+            "appointment_mode": appointment_mode_display,
+            "checkin_time": appointment.CheckinTime,
+            "cancelled": appointment.Cancelled,
+            "token_id": appointment.TokenID,
+            "appointment_status": appointment.AppointmentStatus,
             "name": f"{patient_firstname} {patient_lastname}".strip(),
             "phone": patient_phone,
             "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),

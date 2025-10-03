@@ -32,10 +32,10 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
        2.c) Create new schedule records with incoming start and end dates
     """
     query = db.query(model.DoctorSchedule).filter(
-        model.DoctorSchedule.Facility_id == facility_id,
-        model.DoctorSchedule.Doctor_id == doctor_id,
-        model.DoctorSchedule.WeekDay == weekday,
-        model.DoctorSchedule.Window_Num == window_num
+        model.DoctorSchedule.facility_id == facility_id,
+        model.DoctorSchedule.doctor_id == doctor_id,
+        model.DoctorSchedule.week_day == weekday,
+        model.DoctorSchedule.window_num == window_num
     )
 
     # If you later add a surrogate id to DoctorSchedule, this check will work.
@@ -45,8 +45,8 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
     existing_schedules = query.all()
 
     for existing_schedule in existing_schedules:
-        existing_start = existing_schedule.Start_Date
-        existing_end = existing_schedule.End_Date
+        existing_start = existing_schedule.start_date
+        existing_end = existing_schedule.end_date
 
         # Check overlap
         if (existing_start <= new_end_date and existing_end >= new_start_date):
@@ -63,7 +63,7 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
                 new_existing_end_date = new_start_date - timedelta(days=1)
                 if new_existing_end_date >= existing_start:
                     logger.info(f"Updating existing schedule end date from {existing_end} to {new_existing_end_date}")
-                    existing_schedule.End_Date = new_existing_end_date
+                    existing_schedule.end_date = new_existing_end_date
                 else:
                     logger.info("Deleting existing schedule as adjustment would make it invalid")
                     db.delete(existing_schedule)
@@ -74,15 +74,15 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
                 continuation_start_date = new_end_date + timedelta(days=1)
 
                 continuation_schedule = model.DoctorSchedule(
-                    Facility_id=facility_id,
-                    Doctor_id=doctor_id,
-                    Start_Date=continuation_start_date,
-                    End_Date=existing_end,
-                    WeekDay=weekday,
-                    Window_Num=window_num,
-                    Slot_Start_Time=existing_schedule.Slot_Start_Time,
-                    Slot_End_Time=existing_schedule.Slot_End_Time,
-                    Total_Slots=existing_schedule.Total_Slots if hasattr(existing_schedule, 'Total_Slots') else None
+                    facility_id=facility_id,
+                    doctor_id=doctor_id,
+                    start_date=continuation_start_date,
+                    end_date=existing_end,
+                    week_day=weekday,
+                    window_num=window_num,
+                    slot_start_time=existing_schedule.slot_start_time,
+                    slot_end_time=existing_schedule.slot_end_time,
+                    total_slots=existing_schedule.total_slots
                 )
 
                 db.add(continuation_schedule)
@@ -90,7 +90,7 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
 
                 # Update or delete original depending on coverage
                 if existing_start < new_start_date:
-                    existing_schedule.End_Date = new_start_date - timedelta(days=1)
+                    existing_schedule.end_date = new_start_date - timedelta(days=1)
                     logger.info(f"Updated existing schedule end date to {new_start_date - timedelta(days=1)}")
                 else:
                     logger.info("Deleting original schedule as it's completely covered by new schedule")
@@ -99,7 +99,7 @@ def handle_schedule_overlap(db: Session, facility_id: int, doctor_id: int,
             # Existing end inside new range but overlapping
             elif existing_end < new_end_date and existing_end >= new_start_date:
                 if existing_start < new_start_date:
-                    existing_schedule.End_Date = new_start_date - timedelta(days=1)
+                    existing_schedule.end_date = new_start_date - timedelta(days=1)
                     logger.info(f"Truncated existing schedule to end on {new_start_date - timedelta(days=1)}")
                 else:
                     logger.info("Deleting completely overlapped schedule")
@@ -501,15 +501,15 @@ async def create_schedule(
 
                         # create new schedule for this segment
                         new_schedule = model.DoctorSchedule(
-                            Facility_id=schedule.facilityId,
-                            Doctor_id=schedule.doctorId,
-                            Start_Date=seg_start,
-                            End_Date=seg_end,
-                            WeekDay=weekday,
-                            Window_Num=window_num,
-                            Slot_Start_Time=start_time_obj,
-                            Slot_End_Time=end_time_obj,
-                            Total_Slots=total_slots
+                            facility_id=schedule.facilityId,
+                            doctor_id=schedule.doctorId,
+                            start_date=seg_start,
+                            end_date=seg_end,
+                            week_day=weekday,
+                            window_num=window_num,
+                            slot_start_time=start_time_obj,
+                            slot_end_time=end_time_obj,
+                            total_slots=total_slots
                         )
 
                         db.add(new_schedule)
@@ -577,37 +577,37 @@ async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(
     """Get schedules for a doctor in a facility in the same payload format as create"""
     try:
         schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.Facility_id == facility_id,
-            model.DoctorSchedule.Doctor_id == doctor_id
+            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.doctor_id == doctor_id
         ).order_by(
-            model.DoctorSchedule.Start_Date,
-            model.DoctorSchedule.WeekDay,
-            model.DoctorSchedule.Slot_Start_Time
+            model.DoctorSchedule.start_date,
+            model.DoctorSchedule.week_day,
+            model.DoctorSchedule.slot_start_time
         ).all()
 
         if not schedules:
             raise HTTPException(status_code=404, detail="No schedules found")
 
         # Find the overall date range
-        overall_start = min(s.Start_Date for s in schedules)
-        overall_end = max(s.End_Date for s in schedules)
+        overall_start = min(s.start_date for s in schedules)
+        overall_end = max(s.end_date for s in schedules)
 
         # Initialize weekdays structure
         weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         weekdays_list = []
         
         for weekday in weekdays:
-            weekday_schedules = [s for s in schedules if s.WeekDay == weekday]
+            weekday_schedules = [s for s in schedules if s.week_day == weekday]
             
             if weekday_schedules:
                 # Doctor has schedules for this weekday - show actual slots
                 slot_weeks = []
                 for schedule in weekday_schedules:
                     slot_weeks.append({
-                        "startTime": time_to_string(schedule.Slot_Start_Time),
-                        "endTime": time_to_string(schedule.Slot_End_Time),
-                        "totalSlots": schedule.Total_Slots if hasattr(schedule, 'Total_Slots') and schedule.Total_Slots is not None else "",
-                        "windowNum": str(schedule.Window_Num)
+                        "startTime": time_to_string(schedule.slot_start_time),
+                        "endTime": time_to_string(schedule.slot_end_time),
+                        "totalSlots": schedule.total_slots if schedule.total_slots is not None else "",
+                        "windowNum": str(schedule.window_num)
                     })
             else:
                 # Doctor has no schedules for this weekday - show one empty slot
@@ -647,11 +647,11 @@ async def delete_schedule(facility_id: int, doctor_id: int, start_date: date, en
             raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
         existing_schedule = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.Facility_id == facility_id,
-            model.DoctorSchedule.Doctor_id == doctor_id,
-            model.DoctorSchedule.Start_Date == start_date,
-            model.DoctorSchedule.End_Date == end_date,
-            model.DoctorSchedule.Window_Num == window_num
+            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.doctor_id == doctor_id,
+            model.DoctorSchedule.start_date == start_date,
+            model.DoctorSchedule.end_date == end_date,
+            model.DoctorSchedule.window_num == window_num
         ).first()
 
         if not existing_schedule:
@@ -679,14 +679,14 @@ async def check_doctor_availability(facility_id: int, doctor_id: int, start_date
 
         # Find all schedules that overlap with the requested date range
         schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.Facility_id == facility_id,
-            model.DoctorSchedule.Doctor_id == doctor_id,
-            model.DoctorSchedule.End_Date >= start_date,
-            model.DoctorSchedule.Start_Date <= end_date
+            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.doctor_id == doctor_id,
+            model.DoctorSchedule.end_date >= start_date,
+            model.DoctorSchedule.start_date <= end_date
         ).order_by(
-            model.DoctorSchedule.Start_Date,
-            model.DoctorSchedule.WeekDay,
-            model.DoctorSchedule.Slot_Start_Time
+            model.DoctorSchedule.start_date,
+            model.DoctorSchedule.week_day,
+            model.DoctorSchedule.slot_start_time
         ).all()
 
         availability_details = []
@@ -699,9 +699,9 @@ async def check_doctor_availability(facility_id: int, doctor_id: int, start_date
             # Check if doctor has schedule for this weekday and date
             matching_schedules = [
                 s for s in schedules
-                if (s.WeekDay == weekday and
-                    s.Start_Date <= current_date and
-                    s.End_Date >= current_date)
+                if (s.week_day == weekday and
+                    s.start_date <= current_date and
+                    s.end_date >= current_date)
             ]
 
             date_availability = {
@@ -713,11 +713,11 @@ async def check_doctor_availability(facility_id: int, doctor_id: int, start_date
 
             for schedule_obj in matching_schedules:
                 date_availability["schedules"].append({
-                    "window_num": schedule_obj.Window_Num,
-                    "slot_start_time": str(schedule_obj.Slot_Start_Time),
-                    "slot_end_time": str(schedule_obj.Slot_End_Time),
-                    "schedule_start_date": str(schedule_obj.Start_Date),
-                    "schedule_end_date": str(schedule_obj.End_Date)
+                    "window_num": schedule_obj.window_num,
+                    "slot_start_time": str(schedule_obj.slot_start_time),
+                    "slot_end_time": str(schedule_obj.slot_end_time),
+                    "schedule_start_date": str(schedule_obj.start_date),
+                    "schedule_end_date": str(schedule_obj.end_date)
                 })
 
             availability_details.append(date_availability)

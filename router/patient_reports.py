@@ -69,12 +69,12 @@ class PatientReportCreate(BaseModel):
 def report_to_dict(report) -> Dict[str, Any]:
     """Convert PatientReports object to dictionary for JSON response (excluding FILE_BLOB)"""
     return {
-        "upload_id": report.UPLOAD_ID,
-        "facility_id": report.FACILITY_ID,
-        "patient_id": report.PATIENT_ID,
+        "upload_id": report.upload_id,
+        "facility_id": report.facility_id,
+        "patient_id": report.patient_id,
         "date": report.DATE.isoformat() if report.DATE else None,
-        "appointment_id": report.APPOINTMENT_ID,
-        "diagnosis_id": report.DIAGNOSIS_ID,
+        "appointment_id": report.appointment_id,
+        "diagnosis_id": report.diagnosis_id,
         "filename": report.FILENAME,
         "file_size": len(report.FILE_BLOB) if report.FILE_BLOB else 0
     }
@@ -160,7 +160,7 @@ async def upload_patient_report(
         # Validate that the facility exists
         if facility_id:
             facility = db.query(model.Facility).filter(
-                model.Facility.FacilityID == facility_id
+                model.Facility.facility_id == facility_id
             ).first()
             if not facility:
                 raise HTTPException(status_code=400, detail="Facility not found")
@@ -175,7 +175,7 @@ async def upload_patient_report(
         # Validate appointment if provided
         if appointment_id:
             appointment = db.query(model.Appointment).filter(
-                model.Appointment.AppointmentID == appointment_id
+                model.Appointment.appointment_id == appointment_id
             ).first()
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
@@ -183,7 +183,7 @@ async def upload_patient_report(
         # Validate diagnosis if provided
         if diagnosis_id:
             diagnosis = db.query(model.PatientDiagnosis).filter(
-                model.PatientDiagnosis.DIAGNOSIS_ID == diagnosis_id
+                model.PatientDiagnosis.diagnosis_id == diagnosis_id
             ).first()
             if not diagnosis:
                 raise HTTPException(status_code=400, detail="Patient diagnosis not found")
@@ -240,11 +240,11 @@ async def upload_patient_report(
             try:
                 # Create new patient report record for each file
                 new_report = model.PatientReports(
-                    FACILITY_ID=facility_id,
-                    PATIENT_ID=patient_id,
+                    facility_id=facility_id,
+                    patient_id=patient_id,
                     DATE=report_date,
-                    APPOINTMENT_ID=appointment_id,
-                    DIAGNOSIS_ID=diagnosis_id,
+                    appointment_id=appointment_id,
+                    diagnosis_id=diagnosis_id,
                     FILENAME=filename,
                     FILE_BLOB=file_content
                 )
@@ -324,9 +324,9 @@ async def get_patient_report_file(
         # Query for the specific report with all required parameters
         report = db.query(model.PatientReports).filter(
             and_(
-                model.PatientReports.UPLOAD_ID == upload_id,
-                model.PatientReports.FACILITY_ID == facility_id,
-                model.PatientReports.PATIENT_ID == patient_id,
+                model.PatientReports.upload_id == upload_id,
+                model.PatientReports.facility_id == facility_id,
+                model.PatientReports.patient_id == patient_id,
                 model.PatientReports.DATE == report_date
             )
         ).first()
@@ -390,17 +390,17 @@ async def get_patient_reports(
         # Query with mandatory filters
         query = db.query(model.PatientReports).filter(
             and_(
-                model.PatientReports.FACILITY_ID == facility_id,
-                model.PatientReports.PATIENT_ID == patient_id
+                model.PatientReports.facility_id == facility_id,
+                model.PatientReports.patient_id == patient_id
             )
         )
         
         # Add optional appointment_id filter if provided
         if appointment_id is not None:
-            query = query.filter(model.PatientReports.APPOINTMENT_ID == appointment_id)
+            query = query.filter(model.PatientReports.appointment_id == appointment_id)
         
         # Order by upload_id (most recent first)
-        query = query.order_by(model.PatientReports.UPLOAD_ID.desc())
+        query = query.order_by(model.PatientReports.upload_id.desc())
         
         # Execute query and get results
         reports = query.all()

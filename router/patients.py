@@ -38,7 +38,6 @@ class PatientUpdateSchema(BaseModel):
     gender: Optional[str] = None
     disease: Optional[str] = None
     room_id: Optional[int] = None
-    payment_status: Optional[int] = None
     ABDM_ABHA_id: Optional[str] = None
     facility_id: Optional[int] = None
     email: Optional[str] = None
@@ -83,8 +82,7 @@ class ui_patient(BaseModel):
     email_id: str
     disease: str
     room_id: int
-    payment_status: int = Field(ge=0, le=1)
-    FacilityID: int
+    facility_id: int
    
 
 class patient_response(BaseModel):
@@ -95,8 +93,6 @@ class patient_response(BaseModel):
     address: str
     ABDM_ABHA_id: Optional[str] = None
     gender: str
-    # doctor_visited: Optional[str] = None
-    # last_visited_date: Optional[date] = None
 
     class Config:
         orm_mode = True
@@ -104,7 +100,6 @@ class patient_response(BaseModel):
 class patient_payment(BaseModel):
     id: int
     name: str
-    payment_status: int
     order_id: Optional[str] = None
     amount: Optional[int] = None
 
@@ -124,27 +119,24 @@ class CreateOrder(BaseModel):
 class VerifyOrder(BaseModel):
     order_id: str
 
-# Optimized: Get all patients with doctor details# Optimized: Get all patients with doctor details from appointments
-# Optimized: Get all patients with doctor details from appointments
-# Optimized: Get all patients with doctor details from appointments
 @router.get("/", tags=["patients"])
 async def get_all_patients(facility_id: int = Query(..., description="Facility ID to filter patients"), 
                           db: Session = Depends(get_db)):
     try:
         # Get all patients for the facility
         patients = db.query(model.Patients).filter(
-            model.Patients.FacilityID == facility_id
+            model.Patients.facility_id == facility_id
         ).all()
         
         result = []
         for patient in patients:
             # Get the most recent checked-in appointment
             latest_appointment = db.query(model.Appointment).join(
-                model.Doctors, model.Appointment.DoctorID == model.Doctors.id
+                model.Doctors, model.Appointment.doctor_id == model.Doctors.id
             ).filter(
-                model.Appointment.PatientID == patient.id,
-                model.Appointment.CheckinTime.isnot(None),  # Patient has checked in
-                model.Appointment.Cancelled == False  # Appointment is not cancelled
+                model.Appointment.patient_id == patient.id,
+                model.Appointment.CheckinTime.isnot(None),
+                model.Appointment.Cancelled == False
             ).order_by(
                 model.Appointment.AppointmentDate.desc(),
                 model.Appointment.AppointmentTime.desc()
@@ -155,7 +147,7 @@ async def get_all_patients(facility_id: int = Query(..., description="Facility I
             last_visited_date = None
             if latest_appointment:
                 doctor = db.query(model.Doctors).filter(
-                    model.Doctors.id == latest_appointment.DoctorID
+                    model.Doctors.id == latest_appointment.doctor_id
                 ).first()
                 if doctor:
                     doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}"
@@ -173,10 +165,9 @@ async def get_all_patients(facility_id: int = Query(..., description="Facility I
                 "gender": patient.gender,
                 "disease": patient.disease,
                 "room_id": patient.room_id,
-                "payment_status": patient.payment_status,
                 "email_id": patient.email_id,
                 "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None),
-                "FacilityID": patient.FacilityID,
+                "facility_id": patient.facility_id,
                 "doctor_visited": doctor_name,
                 "last_visited_date": last_visited_date
             }
@@ -186,8 +177,6 @@ async def get_all_patients(facility_id: int = Query(..., description="Facility I
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-# Optimized: Get patient by ID with doctor details from appointments
-# Optimized: Get patient by ID with doctor details from appointments
 @router.get("/{patient_id}", tags=["patients"])
 async def get_patient_byid(patient_id: int, 
                           facility_id: int = Query(..., description="Facility ID"), 
@@ -195,7 +184,7 @@ async def get_patient_byid(patient_id: int,
     try:
         patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
-            model.Patients.FacilityID == facility_id
+            model.Patients.facility_id == facility_id
         ).first()
         
         if not patient:
@@ -203,11 +192,11 @@ async def get_patient_byid(patient_id: int,
 
         # Get the most recent checked-in appointment
         latest_appointment = db.query(model.Appointment).join(
-            model.Doctors, model.Appointment.DoctorID == model.Doctors.id
+            model.Doctors, model.Appointment.doctor_id == model.Doctors.id
         ).filter(
-            model.Appointment.PatientID == patient.id,
-            model.Appointment.CheckinTime.isnot(None),  # Patient has checked in
-            model.Appointment.Cancelled == False  # Appointment is not cancelled
+            model.Appointment.patient_id == patient.id,
+            model.Appointment.CheckinTime.isnot(None),
+            model.Appointment.Cancelled == False
         ).order_by(
             model.Appointment.AppointmentDate.desc(),
             model.Appointment.AppointmentTime.desc()
@@ -218,7 +207,7 @@ async def get_patient_byid(patient_id: int,
         last_visited_date = None
         if latest_appointment:
             doctor = db.query(model.Doctors).filter(
-                model.Doctors.id == latest_appointment.DoctorID
+                model.Doctors.id == latest_appointment.doctor_id
             ).first()
             if doctor:
                 doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}"
@@ -236,10 +225,9 @@ async def get_patient_byid(patient_id: int,
             "gender": patient.gender,
             "disease": patient.disease,
             "room_id": patient.room_id,
-            "payment_status": patient.payment_status,
             "email_id": patient.email_id,
             "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None),
-            "FacilityID": patient.FacilityID,
+            "facility_id": patient.facility_id,
             "doctor_visited": doctor_name,
             "last_visited_date": last_visited_date
         }
@@ -249,7 +237,7 @@ async def get_patient_byid(patient_id: int,
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-# Optimized: Background email sending# Optimized: Background email sending with timeout
+
 async def send_mail_background(email_list: List[str], name: str, room_no: int):
     """Background task for sending emails to avoid blocking the main thread"""
     try:
@@ -288,7 +276,6 @@ async def send_mail_background(email_list: List[str], name: str, room_no: int):
 
         fm = FastMail(get_mail_config())
 
-        # ✅ Added timeout to avoid infinite wait if mail server hangs
         try:
             await asyncio.wait_for(fm.send_message(message), timeout=15)
             print(f"✅ Email sent successfully to {email_list}")
@@ -301,7 +288,6 @@ async def send_mail_background(email_list: List[str], name: str, room_no: int):
         print(f"❌ Email sending outer failure: {str(e)}")
 
 
-# Optimized: Add new patient with background email
 @router.post("/", tags=["patients"])
 async def add_new_patient(patient: ui_patient, 
                          background_tasks: BackgroundTasks,
@@ -317,12 +303,9 @@ async def add_new_patient(patient: ui_patient,
             gender=patient.gender,
             disease=patient.disease,
             room_id=patient.room_id,
-            payment_status=patient.payment_status,
             email_id=patient.email_id,
             ABDM_ABHA_id=patient.ABDM_ABHA_id,
-            FacilityID=patient.FacilityID,
-            # last_visited_doctor_id=patient.last_visited_doctor_id,
-            # last_visited_date=patient.last_visited_date
+            facility_id=patient.facility_id
         )
 
         db.add(patient_model)
@@ -340,7 +323,6 @@ async def add_new_patient(patient: ui_patient,
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-# Optimized: Update patient with proper DOB handling and new fields
 @router.api_route("/{patient_id}", methods=["PATCH"], tags=["patients"])
 async def update_patient(
     patient_id: int,
@@ -352,7 +334,7 @@ async def update_patient(
     try:
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
-            model.Patients.FacilityID == facility_id
+            model.Patients.facility_id == facility_id
         ).first()
         
         if not existing_patient:
@@ -374,29 +356,25 @@ async def update_patient(
             if isinstance(v, str) and (v.strip().lower() in invalid_strings or v.strip() == ""):
                 continue
                 
-            # Skip zero integers for non-critical fields (but allow 0 for payment_status)
-            if isinstance(v, int) and v == 0 and k not in ['payment_status', 'last_visited_doctor_id']:
+            # Skip zero integers for non-critical fields
+            if isinstance(v, int) and v == 0 and k not in ['last_visited_doctor_id']:
                 continue
             
             # Special handling for DOB field to prevent unwanted updates
             if k == "dob" and isinstance(v, date):
                 current_db_dob = getattr(existing_patient, 'dob', None)
                 
-                # Only update DOB if:
-                # 1. It's different from the current DB value AND
-                # 2. It's not today's date (which might be a default) AND
-                # 3. It's not the same as when the patient was created (if available)
                 if (current_db_dob != v and 
                     v != current_date and
-                    v.year > 1900 and  # Reasonable birth year check
-                    v < current_date):  # DOB must be in the past
+                    v.year > 1900 and
+                    v < current_date):
                     filtered_data[k] = v
                 continue
             
             # Special handling for last_visited_date
             if k == "last_visited_date" and isinstance(v, date):
                 current_db_date = getattr(existing_patient, 'last_visited_date', None)
-                if current_db_date != v and v <= current_date:  # Allow past dates and today
+                if current_db_date != v and v <= current_date:
                     filtered_data[k] = v
                 continue
             
@@ -425,7 +403,7 @@ async def update_patient(
             if current_value != v:
                 filtered_data[k] = v
         
-        # Handle email updates - now simplified to use direct email field
+        # Handle email updates
         send_email = False
         if 'email' in filtered_data and filtered_data['email']:
             new_email = filtered_data['email']
@@ -435,7 +413,6 @@ async def update_patient(
                 if current_email != new_email:
                     existing_patient.email_id = new_email
                     send_email = True
-                    # Remove email from filtered_data since we handled it separately
                     del filtered_data['email']
         
         if not filtered_data and not send_email:
@@ -461,7 +438,6 @@ async def update_patient(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-# Optimized: Delete with single query
 @router.delete("/", tags=["patients"])
 async def delete_patient_details(patient_id: int = Query(..., description="Patient ID"),
                                 facility_id: int = Query(..., description="Facility ID"),
@@ -470,7 +446,7 @@ async def delete_patient_details(patient_id: int = Query(..., description="Patie
         # Single query to check existence and delete
         deleted_count = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
-            model.Patients.FacilityID == facility_id
+            model.Patients.facility_id == facility_id
             
         ).delete()
         
@@ -535,7 +511,6 @@ async def create_order(input: CreateOrder, id: int, db: Session = Depends(get_db
         return {
             "id": patient.id,
             "name": f"{patient.firstname} {patient.lastname}",
-            "payment_status": patient.payment_status,
             "order_id": patient.order_id,
             "amount": patient.amount
         }
@@ -555,10 +530,6 @@ async def verify_order(input: str, db: Session = Depends(get_db)):
         order = client.order.fetch(input)
 
         if order['status'] == 'paid':
-            patient = db.query(model.Patients).filter(model.Patients.order_id == input).first()
-            if patient:
-                patient.payment_status = 1
-                db.commit()
             return JSONResponse(status_code=200, content={'message': 'Payment successful'})
         else:
             return JSONResponse(status_code=400, content={'message': 'Payment failed'})

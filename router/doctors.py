@@ -34,7 +34,7 @@ class ui_Doctors(BaseModel):
     email: Optional[str] = None
     consultation_fee: Optional[Decimal] = None
     ABDM_NHPR_id: Optional[str] = None
-    FacilityID: Optional[int] = None
+    facility_id: Optional[int] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
@@ -50,7 +50,7 @@ class ui_Doctors(BaseModel):
                 "email": "john.smith@hospital.com",
                 "consultation_fee": 500.00,
                 "ABDM_NHPR_id": "ABDM123456",
-                "FacilityID": 1,
+                "facility_id": 1,
                 "gender": "Male",
                 "age": 35,
                 "experience": 10,
@@ -66,7 +66,7 @@ class ui_DoctorsUpdate(BaseModel):
     email: Optional[str] = None
     consultation_fee: Optional[Decimal] = None
     ABDM_NHPR_id: Optional[str] = None
-    FacilityID: Optional[int] = None
+    facility_id: Optional[int] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
@@ -82,7 +82,7 @@ class ui_DoctorsUpdate(BaseModel):
                 "email": "john.smith@hospital.com",
                 "consultation_fee": 500.00,
                 "ABDM_NHPR_id": "ABDM123456",
-                "FacilityID": 1,
+                "facility_id": 1,
                 "gender": "Male",
                 "age": 35,
                 "experience": 10,
@@ -101,7 +101,7 @@ class schedule_response(BaseModel):
         from_attributes = True
 
 class facility_response(BaseModel):
-    FacilityID: int
+    facility_id: int
     name: str
 
     class Config:
@@ -136,7 +136,7 @@ class doctor_schema_with_schedule(BaseModel):
     specialization: str
     consultation_fee: Optional[Decimal] = None
     ABDM_NHPR_id: Optional[str] = None
-    FacilityID: Optional[int] = None
+    facility_id: Optional[int] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
@@ -195,10 +195,10 @@ def group_schedules_by_time(schedules):
     grouped = {}
     
     for schedule in schedules:
-        consultation_time = format_consultation_time(schedule.Slot_Start_Time, schedule.Slot_End_Time)
-        window_num = getattr(schedule, 'Window_Num', None)
-        start_date = getattr(schedule, 'Start_Date', None)
-        end_date = getattr(schedule, 'End_Date', None)
+        consultation_time = format_consultation_time(schedule.slot_start_time, schedule.slot_end_time)
+        window_num = schedule.window_num
+        start_date = schedule.start_date
+        end_date = schedule.end_date
         
         key = f"{consultation_time}_{window_num}_{start_date}_{end_date}"
         
@@ -211,7 +211,7 @@ def group_schedules_by_time(schedules):
                 'days': []
             }
         
-        grouped[key]['days'].append(schedule.WeekDay)
+        grouped[key]['days'].append(schedule.week_day)
     
     # Format the grouped schedules
     result = []
@@ -225,7 +225,18 @@ def group_schedules_by_time(schedules):
             'Thursday': 'Thu', 'Friday': 'Fri', 'Saturday': 'Sat', 'Sunday': 'Sun'
         }
         
-        sorted_days = sorted(set(days), key=lambda x: day_order.index(x) if x in day_order else 999)
+        # Handle both abbreviated and full day names
+        day_abbrev_reverse = {v: k for k, v in day_abbrev.items()}
+        
+        # Normalize to full day names
+        normalized_days = []
+        for day in days:
+            if day in day_abbrev_reverse:
+                normalized_days.append(day_abbrev_reverse[day])
+            else:
+                normalized_days.append(day)
+        
+        sorted_days = sorted(set(normalized_days), key=lambda x: day_order.index(x) if x in day_order else 999)
         
         # Format days (e.g., "Mon-Fri" for consecutive days, "Mon, Wed, Fri" for non-consecutive)
         if len(sorted_days) == 5 and all(day in sorted_days for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']):
@@ -272,7 +283,7 @@ async def get_all_doctors(
             query = query.filter(model.Doctors.is_active == True)
             
         if facility_id is not None:
-            query = query.filter(model.Doctors.FacilityID == facility_id)
+            query = query.filter(model.Doctors.facility_id == facility_id)
             
         doctors = query.all()
 
@@ -327,18 +338,18 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
                             getattr(doctor.facility, 'facility_name', None) or \
                             getattr(doctor.facility, 'FacilityName', None) or \
                             "Unknown Facility"
-            facility_info = facility_response(FacilityID=doctor.facility.FacilityID, name=facility_name)
+            facility_info = facility_response(facility_id=doctor.facility.facility_id, name=facility_name)
 
-        elif doctor.FacilityID and doctor.FacilityID > 0:
-            facility = db.query(model.Facilities).filter(
-                model.Facilities.FacilityID == doctor.FacilityID
+        elif doctor.facility_id and doctor.facility_id > 0:
+            facility = db.query(model.Facility).filter(
+                model.Facility.facility_id == doctor.facility_id
             ).first()
             if facility:
                 facility_name = getattr(facility, 'name', None) or \
                                 getattr(facility, 'facility_name', None) or \
                                 getattr(facility, 'FacilityName', None) or \
                                 "Unknown Facility"
-                facility_info = facility_response(FacilityID=facility.FacilityID, name=facility_name)
+                facility_info = facility_response(facility_id=facility.facility_id, name=facility_name)
 
         # Group and format schedules using new relationship
         schedules = group_schedules_by_time(doctor.doctor_schedules)
@@ -353,7 +364,7 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
             specialization=doctor.specialization,
             consultation_fee=getattr(doctor, 'consultation_fee', None),
             ABDM_NHPR_id=getattr(doctor, 'ABDM_NHPR_id', None),
-            FacilityID=doctor.FacilityID,
+            facility_id=doctor.facility_id,
             gender=getattr(doctor, 'gender', None),
             age=getattr(doctor, 'age', None),
             experience=getattr(doctor, 'experience', None),
@@ -371,8 +382,8 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
 @router.post("/", tags=["doctors"])
 async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db)):
     try:
-        if doctor.FacilityID:
-            facility = db.query(model.Facility).filter(model.Facility.FacilityID == doctor.FacilityID).first()
+        if doctor.facility_id:
+            facility = db.query(model.Facility).filter(model.Facility.facility_id == doctor.facility_id).first()
             if not facility:
                 raise HTTPException(status_code=400, detail="Facility not found")
 
@@ -384,7 +395,7 @@ async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db)):
         doctor_model.email = doctor.email
         doctor_model.consultation_fee = doctor.consultation_fee
         doctor_model.ABDM_NHPR_id = doctor.ABDM_NHPR_id
-        doctor_model.FacilityID = doctor.FacilityID
+        doctor_model.facility_id = doctor.facility_id
         doctor_model.gender = doctor.gender
         doctor_model.age = doctor.age
         doctor_model.experience = doctor.experience
@@ -422,7 +433,7 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Sess
                 if value.strip() and value != "string":
                     filtered_data[key] = value
             elif isinstance(value, (int, float, Decimal)):
-                # ✅ Skip updating consultation_fee and age to 0 accidentally
+                # Skip updating consultation_fee and age to 0 accidentally
                 if key == "consultation_fee" and float(value) == 0.0:
                     continue
                 elif key == "age" and int(value) == 0:
@@ -437,18 +448,18 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Sess
         if not filtered_data:
             raise HTTPException(status_code=400, detail="No valid fields provided for update")
 
-        # ✅ Validate FacilityID only if it's provided and truthy
-        if "FacilityID" in filtered_data:
-            facility_id = filtered_data.get("FacilityID")
+        # Validate facility_id only if it's provided and truthy
+        if "facility_id" in filtered_data:
+            facility_id = filtered_data.get("facility_id")
             if facility_id:
                 facility = db.query(model.Facility).filter(
-                    model.Facility.FacilityID == facility_id
+                    model.Facility.facility_id == facility_id
                 ).first()
                 if not facility:
                     raise HTTPException(status_code=400, detail="Facility not found")
             else:
                 # If facility_id is None or falsy (0), remove it to avoid overwriting
-                filtered_data.pop("FacilityID")
+                filtered_data.pop("facility_id")
 
         # Apply updates
         for key, value in filtered_data.items():
@@ -458,9 +469,9 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Sess
         db.commit()
         db.refresh(existing_doctor)
 
-        # Updated to use new table name and column names
+        # Updated to use correct lowercase column names
         doctor_schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.Doctor_id == existing_doctor.id
+            model.DoctorSchedule.doctor_id == existing_doctor.id
         ).all()
 
         schedules = group_schedules_by_time(doctor_schedules)

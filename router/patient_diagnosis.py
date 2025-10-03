@@ -72,12 +72,12 @@ class PatientDiagnosisCreate(BaseModel):
 def diagnosis_to_dict(diagnosis) -> Dict[str, Any]:
     """Convert PatientDiagnosis object to dictionary for JSON response"""
     return {
-        "diagnosis_id": diagnosis.DIAGNOSIS_ID,
-        "facility_id": diagnosis.FACILITY_ID,
-        "patient_id": diagnosis.PATIENT_ID,
+        "diagnosis_id": diagnosis.diagnosis_id,
+        "facility_id": diagnosis.facility_id,
+        "patient_id": diagnosis.patient_id,
         "diagnosis_date": diagnosis.DATE.isoformat() if diagnosis.DATE else None,
-        "appointment_id": diagnosis.APPOINTMENT_ID,
-        "doctor_id": diagnosis.DOCTOR_ID,
+        "appointment_id": diagnosis.appointment_id,
+        "doctor_id": diagnosis.doctor_id,
         "vital_bp": diagnosis.VITAL_BP,
         "vital_hr": diagnosis.VITAL_HR,
         "vital_temp": diagnosis.VITAL_TEMP,
@@ -117,7 +117,7 @@ async def create_or_update_patient_diagnosis(
         # Validate that the facility exists
         if diagnosis_data.facility_id:
             facility = db.query(model.Facility).filter(
-                model.Facility.FacilityID == diagnosis_data.facility_id
+                model.Facility.facility_id == diagnosis_data.facility_id
             ).first()
             if not facility:
                 raise HTTPException(status_code=400, detail="Facility not found")
@@ -141,18 +141,18 @@ async def create_or_update_patient_diagnosis(
         # Validate appointment if provided
         if diagnosis_data.appointment_id:
             appointment = db.query(model.Appointment).filter(
-                model.Appointment.AppointmentID == diagnosis_data.appointment_id
+                model.Appointment.appointment_id == diagnosis_data.appointment_id
             ).first()
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
         
-        # Convert lowercase field names to uppercase for database model
+        # Convert lowercase field names to match the model
         diagnosis_dict = {
-            "FACILITY_ID": diagnosis_data.facility_id,
-            "PATIENT_ID": diagnosis_data.patient_id,
+            "facility_id": diagnosis_data.facility_id,
+            "patient_id": diagnosis_data.patient_id,
             "DATE": diagnosis_data.diagnosis_date,
-            "APPOINTMENT_ID": diagnosis_data.appointment_id,
-            "DOCTOR_ID": diagnosis_data.doctor_id,
+            "appointment_id": diagnosis_data.appointment_id,
+            "doctor_id": diagnosis_data.doctor_id,
             "VITAL_BP": diagnosis_data.vital_bp,
             "VITAL_HR": diagnosis_data.vital_hr,
             "VITAL_TEMP": diagnosis_data.vital_temp,
@@ -210,20 +210,20 @@ async def get_patient_diagnosis(
         # Start with mandatory filters
         query = db.query(model.PatientDiagnosis).filter(
             and_(
-                model.PatientDiagnosis.FACILITY_ID == facility_id,
-                model.PatientDiagnosis.PATIENT_ID == patient_id
+                model.PatientDiagnosis.facility_id == facility_id,
+                model.PatientDiagnosis.patient_id == patient_id
             )
         )
         
         # Apply optional filters
         if doctor_id is not None:
-            query = query.filter(model.PatientDiagnosis.DOCTOR_ID == doctor_id)
+            query = query.filter(model.PatientDiagnosis.doctor_id == doctor_id)
         
         if diagnosis_date is not None:
             query = query.filter(model.PatientDiagnosis.DATE == diagnosis_date)
         
         if diagnosis_id is not None:
-            query = query.filter(model.PatientDiagnosis.DIAGNOSIS_ID == diagnosis_id)
+            query = query.filter(model.PatientDiagnosis.diagnosis_id == diagnosis_id)
         
         # Order by date (most recent first)
         query = query.order_by(model.PatientDiagnosis.DATE.desc())

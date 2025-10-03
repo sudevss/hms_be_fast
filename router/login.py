@@ -30,16 +30,16 @@ class LoginRequest(BaseModel):
     password: str
 
 class UserDetails(BaseModel):
-    UserID: int
+    user_id: int
     UserName: str
     Role: str
-    FacilityID: int
+    facility_id: int
     
     class Config:
         orm_mode = True
 
 class FacilityDetails(BaseModel):
-    FacilityID: int
+    facility_id: int
     FacilityName: str
     FacilityAddress: str
     TaxNumber: str
@@ -126,17 +126,17 @@ def authenticate_user(db: Session, user_id: str, password: str):
             UserMaster.UserName.ilike(user_id)
         ).first()
     
-    # Alternative: If UserName doesn't match User ID format, try by UserID field
+    # Alternative: If UserName doesn't match User ID format, try by user_id field
     if not user and user_id.isdigit():
         user = db.query(UserMaster).filter(
-            UserMaster.UserID == int(user_id)
+            UserMaster.user_id == int(user_id)
         ).first()
     
     if not user:
         print(f"DEBUG: User with ID '{user_id}' not found in database")
         return None
     
-    print(f"DEBUG: Found user '{user.UserName}' (ID: {user.UserID}) with password '{user.Password}'")
+    print(f"DEBUG: Found user '{user.UserName}' (ID: {user.user_id}) with password '{user.Password}'")
     print(f"DEBUG: Comparing with input password '{password}'")
     
     # Verify password
@@ -148,11 +148,11 @@ def authenticate_user(db: Session, user_id: str, password: str):
     
     # Get facility details
     facility = db.query(Facility).filter(
-        Facility.FacilityID == user.FacilityID
+        Facility.facility_id == user.facility_id
     ).first()
     
     if not facility:
-        print(f"DEBUG: Facility with ID {user.FacilityID} not found")
+        print(f"DEBUG: Facility with ID {user.facility_id} not found")
         return None
     
     return user, facility
@@ -186,8 +186,8 @@ def get_current_user(
     
     # Verify user still exists in database
     user = db.query(UserMaster).filter(
-        UserMaster.UserID == user_id,
-        UserMaster.FacilityID == facility_id
+        UserMaster.user_id == user_id,
+        UserMaster.facility_id == facility_id
     ).first()
     
     if user is None:
@@ -236,8 +236,8 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={
-            "user_id": user.UserID,
-            "facility_id": user.FacilityID,
+            "user_id": user.user_id,
+            "facility_id": user.facility_id,
             "role": user.Role,
             "username": user.UserName
         },
@@ -252,13 +252,13 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         token_type="bearer",
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # in seconds
         user_details=UserDetails(
-            UserID=user.UserID,
+            user_id=user.user_id,
             UserName=user.UserName,
             Role=user.Role,
-            FacilityID=user.FacilityID
+            facility_id=user.facility_id
         ),
         facility_details=FacilityDetails(
-            FacilityID=facility.FacilityID,
+            facility_id=facility.facility_id,
             FacilityName=facility.FacilityName,
             FacilityAddress=facility.FacilityAddress,
             TaxNumber=facility.TaxNumber
@@ -272,8 +272,8 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
 #     Get current authenticated user's information
 #     """
 #     # Get fresh user and facility details from database
-#     user = db.query(UserMaster).filter(UserMaster.UserID == current_user.user_id).first()
-#     facility = db.query(Facility).filter(Facility.FacilityID == current_user.facility_id).first()
+#     user = db.query(UserMaster).filter(UserMaster.user_id == current_user.user_id).first()
+#     facility = db.query(Facility).filter(Facility.facility_id == current_user.facility_id).first()
     
 #     if not user or not facility:
 #         raise HTTPException(
@@ -283,13 +283,13 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     
 #     return {
 #         "user_details": UserDetails(
-#             UserID=user.UserID,
+#             user_id=user.user_id,
 #             UserName=user.UserName,
 #             Role=user.Role,
-#             FacilityID=user.FacilityID
+#             facility_id=user.facility_id
 #         ),
 #         "facility_details": FacilityDetails(
-#             FacilityID=facility.FacilityID,
+#             facility_id=facility.facility_id,
 #             FacilityName=facility.FacilityName,
 #             FacilityAddress=facility.FacilityAddress,
 #             TaxNumber=facility.TaxNumber

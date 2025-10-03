@@ -6,7 +6,7 @@ import sqlalchemy as sa
 class Facility(Base):
     __tablename__ = "facility"
 
-    FacilityID = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, primary_key=True, index=True)
     FacilityName = Column(String(200), nullable=False)
     FacilityAddress = Column(String(500))
     ABDM_NHFR_ID = Column(String(100))
@@ -31,7 +31,7 @@ class Doctors(Base):
     email = Column(String(200), index=True)
     consultation_fee = Column(Numeric(10, 2))
     ABDM_NHPR_id = Column(String(100))
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
     gender = Column(String(10))
     age = Column(Integer)
     experience = Column(Integer)
@@ -65,7 +65,7 @@ class Patients(Base):
     payment_status = Column(Integer, default=0)
     order_id = Column(String(50))
     amount = Column(Integer, default=0)
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
     payment_method = Column(String(50), default="Cash")
     is_paid = Column(Boolean, default=False)
 
@@ -83,11 +83,11 @@ class Patients(Base):
 class UserMaster(Base):
     __tablename__ = "usermaster"
 
-    UserID = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, primary_key=True, index=True)
     UserName = Column(String(50), nullable=False)
     Password = Column(String(100), nullable=False)
     Role = Column(String(20), nullable=False)
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
 
     facility = relationship("Facility", back_populates="users")
 
@@ -96,22 +96,22 @@ class UserMaster(Base):
 
 #     username = Column(String(50), primary_key=True, index=True)  # Added length - THIS WAS THE MAIN ERROR
 #     hashed_pass = Column(String(255))                            # Added length for hashed passwords
-#     FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
+#     facility_id = Column(Integer, ForeignKey("facility.facility_id"))
 
 #     facility = relationship("Facility")
 
 class DoctorSchedule(Base):
     __tablename__ = "doctor_schedule"
 
-    Facility_id = Column(Integer, ForeignKey("facility.FacilityID"), primary_key=True)
-    Doctor_id = Column(Integer, ForeignKey("doctors.id"), primary_key=True)
-    Start_Date = Column(Date, primary_key=True)
-    End_Date = Column(Date, primary_key=True)
-    WeekDay = Column(String(10), primary_key=True)
-    Window_Num = Column(Integer, primary_key=True)
-    Slot_Start_Time = Column(Time, nullable=False)
-    Slot_End_Time = Column(Time, nullable=False)
-    Total_Slots = Column(String(50), nullable=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), primary_key=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), primary_key=True)
+    start_date = Column(Date, primary_key=True)
+    end_date = Column(Date, primary_key=True)
+    week_day = Column(String(10), primary_key=True)
+    window_num = Column(Integer, primary_key=True)
+    slot_start_time = Column(Time, nullable=False)
+    slot_end_time = Column(Time, nullable=False)
+    total_slots = Column(String(50), nullable=True)
 
     facility = relationship("Facility", back_populates="doctor_schedules")
     doctor = relationship("Doctors", back_populates="doctor_schedules")
@@ -120,7 +120,7 @@ class DoctorBookedSlots(Base):
 
     DCID = Column(Integer, primary_key=True, index=True, autoincrement=True)
     Doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)   # ✅ FIXED
-    Facility_id = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False, index=True)
+    Facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False, index=True)
     Slot_date = Column(Date, nullable=False, index=True)
     Start_Time = Column(Time, nullable=False)
     End_Time = Column(Time, nullable=False)
@@ -145,10 +145,10 @@ class DoctorBookedSlots(Base):
 class Appointment(Base):
     __tablename__ = "appointment"
 
-    AppointmentID = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    PatientID = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
-    DoctorID = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False, index=True)
+    appointment_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False, index=True)
     DCID = Column(Integer, ForeignKey("doctor_booked_slots.DCID"), nullable=False, index=True)
 
     payment_method = Column(String(50), default="Cash")
@@ -176,25 +176,28 @@ class Appointment(Base):
             "payment_method IN ('Cash','Debit Card','Credit Card','UPI','Net Banking')",
             name="check_payment_method"
         ),
-        Index("idx_patient_date", "PatientID", "AppointmentDate"),
-        Index("idx_doctor_date", "DoctorID", "AppointmentDate"),
-        Index("idx_facility_date", "FacilityID", "AppointmentDate"),
-        UniqueConstraint("TokenID", "FacilityID", "AppointmentDate", name="uq_token_facility_date"),
+        Index("idx_patient_date", "patient_id", "AppointmentDate"),
+        Index("idx_doctor_date", "doctor_id", "AppointmentDate"),
+        Index("idx_facility_date", "facility_id", "AppointmentDate"),
+        Index("idx_patient_date", "patient_id", "AppointmentDate"),
+        Index("idx_doctor_date", "doctor_id", "AppointmentDate"),
+        Index("idx_facility_date", "facility_id", "AppointmentDate"),
+        UniqueConstraint("TokenID", "facility_id", "AppointmentDate", name="uq_token_facility_date"),
     )
 
 class MedicalRecord(Base):
     __tablename__ = "medical_record"
 
-    RecordID = Column(Integer, primary_key=True, index=True)
-    PatientID = Column(Integer, ForeignKey("patients.id"), nullable=False)
-    DoctorID = Column(Integer, ForeignKey("doctors.id"), nullable=False)
-    AppointmentID = Column(Integer, ForeignKey("appointment.AppointmentID"))
+    record_id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
     Diagnosis = Column(String(500))
     Treatment = Column(String(500))
     Medicine_Prescription = Column(String(1000))
     Lab_Prescription = Column(String(1000))
     RecordDate = Column(DateTime, default=func.now())
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
 
     patient = relationship("Patients", back_populates="medical_records")
     doctor = relationship("Doctors", back_populates="medical_records")
@@ -204,14 +207,14 @@ class MedicalRecord(Base):
 class Billing(Base):
     __tablename__ = "billing"
 
-    BillID = Column(Integer, primary_key=True, index=True)
-    AppointmentID = Column(Integer, ForeignKey("appointment.AppointmentID"), nullable=False)
+    bill_id = Column(Integer, primary_key=True, index=True)
+    appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"), nullable=False)
     Amount = Column(Integer, nullable=False)
     BillDate = Column(DateTime, default=func.now())
     PaymentStatus = Column(String(20), nullable=False)
     PaymentMode = Column(String(100))
     TransactionID = Column(String(50))
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
 
     appointment = relationship("Appointment")
     facility = relationship("Facility")
@@ -221,13 +224,13 @@ class Billing(Base):
 class MedicalDocument(Base):
     __tablename__ = "medical_document"  # Fixed: was tablename
 
-    DocumentID = Column(Integer, primary_key=True, index=True)
-    AppointmentID = Column(Integer, ForeignKey("appointment.AppointmentID"))
-    PatientID = Column(Integer, ForeignKey("patients.id"))
-    DoctorID = Column(Integer, ForeignKey("doctors.id"))
+    document_id = Column(Integer, primary_key=True, index=True)
+    appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
+    patient_id = Column(Integer, ForeignKey("patients.id"))
+    doctor_id = Column(Integer, ForeignKey("doctors.id"))
     DocumentType = Column(String(100))
     DocumentPath = Column(String(255))
-    FacilityID = Column(Integer, ForeignKey("facility.FacilityID"))
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"))
 
     appointment = relationship("Appointment")
     patient = relationship("Patients", back_populates="medical_documents")
@@ -239,12 +242,12 @@ class MedicalDocument(Base):
 class PatientDiagnosis(Base):
     __tablename__ = "patient_diagnosis"
 
-    DIAGNOSIS_ID = Column(Integer, primary_key=True, index=True)
-    FACILITY_ID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
-    PATIENT_ID = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    diagnosis_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     DATE = Column(Date, nullable=False)
-    APPOINTMENT_ID = Column(Integer, ForeignKey("appointment.AppointmentID"))
-    DOCTOR_ID = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
     VITAL_BP = Column(String(50))
     VITAL_HR = Column(String(50))
     VITAL_TEMP = Column(String(50))
@@ -262,8 +265,8 @@ class PatientDiagnosis(Base):
     doctor = relationship("Doctors")
 
     __table_args__ = (
-        Index("idx_patient_diagnosis_date", "PATIENT_ID", "DATE"),
-        Index("idx_facility_patient", "FACILITY_ID", "PATIENT_ID"),
+        Index("idx_patient_diagnosis_date", "patient_id", "DATE"),
+        Index("idx_facility_patient", "facility_id", "patient_id"),
     )
 
 
@@ -271,12 +274,12 @@ class PatientDiagnosis(Base):
 class PatientReports(Base):
     __tablename__ = "patient_reports"
 
-    UPLOAD_ID = Column(Integer, primary_key=True, index=True, autoincrement=True)  # Generated automatically on upload
-    FACILITY_ID = Column(Integer, ForeignKey("facility.FacilityID"), nullable=False)
-    PATIENT_ID = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    upload_id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # Generated automatically on upload
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     DATE = Column(Date, nullable=False)
-    APPOINTMENT_ID = Column(Integer, ForeignKey("appointment.AppointmentID"))
-    DIAGNOSIS_ID = Column(Integer, ForeignKey("patient_diagnosis.DIAGNOSIS_ID"))
+    appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"))
     FILENAME = Column(Text, nullable=False)
     FILE_BLOB = Column(sa.LargeBinary)  # BLOB type for storing file data
 
@@ -287,8 +290,8 @@ class PatientReports(Base):
     diagnosis = relationship("PatientDiagnosis")
 
     __table_args__ = (
-        Index("idx_patient_reports_facility", "FACILITY_ID"),
-        Index("idx_patient_reports_patient", "PATIENT_ID"),
+        Index("idx_patient_reports_facility", "facility_id"),
+        Index("idx_patient_reports_patient", "patient_id"),
         Index("idx_patient_reports_date", "DATE"),
-        Index("idx_patient_reports_appointment", "APPOINTMENT_ID"),
+        Index("idx_patient_reports_appointment", "appointment_id"),
     )

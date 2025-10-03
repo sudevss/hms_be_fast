@@ -21,7 +21,7 @@ class FacilityUpdateSchema(BaseModel):
     TaxNumber: Optional[str] = None
 
 class FacilityResponse(FacilityBase):
-    FacilityID: int
+    facility_id: int
 
     class Config:
         orm_mode = True
@@ -38,7 +38,7 @@ def get_all_facilities(db: Session = Depends(get_db)):
 
 @router.get("/{facility_id}", response_model=FacilityResponse)
 def get_facility(facility_id: int, db: Session = Depends(get_db)):
-    facility = db.query(Facility).filter(Facility.FacilityID == facility_id).first()
+    facility = db.query(Facility).filter(Facility.facility_id == facility_id).first()
     if not facility:
         raise HTTPException(status_code=404, detail="Facility not found")
     return facility
@@ -60,7 +60,7 @@ async def update_facility(
 ):
     try:
         existing_facility = db.query(Facility).filter(
-            Facility.FacilityID == facility_id
+            Facility.facility_id == facility_id
         ).first()
         
         if not existing_facility:
@@ -107,7 +107,7 @@ async def update_facility(
 
 @router.delete("/{facility_id}")
 def delete_facility(facility_id: int, db: Session = Depends(get_db)):
-    facility = db.query(Facility).filter(Facility.FacilityID == facility_id).first()
+    facility = db.query(Facility).filter(Facility.facility_id == facility_id).first()
     if not facility:
         raise HTTPException(status_code=404, detail="Facility not found")
     db.delete(facility)
