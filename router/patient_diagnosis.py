@@ -54,7 +54,7 @@ class PatientDiagnosisCreate(BaseModel):
                 "facility_id": 0,
                 "patient_id": 0,
                 "diagnosis_date": "2025-09-15",
-                "appointment_id": null,
+                "appointment_id": 0,
                 "doctor_id": 0,
                 "vital_bp": "120/80",
                 "vital_hr": "72",
