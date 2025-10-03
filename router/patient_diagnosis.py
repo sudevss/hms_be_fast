@@ -51,11 +51,11 @@ class PatientDiagnosisCreate(BaseModel):
         }
         json_schema_extra = {
             "example": {
-                "facility_id": 0,
-                "patient_id": 0,
+                "facility_id": 1,
+                "patient_id": 27,
                 "diagnosis_date": "2025-09-15",
-                "appointment_id": 0,
-                "doctor_id": 0,
+                "appointment_id": None,  # FIXED: Changed from 0 to None (null in JSON)
+                "doctor_id": 9,
                 "vital_bp": "120/80",
                 "vital_hr": "72",
                 "vital_temp": "98.6",
