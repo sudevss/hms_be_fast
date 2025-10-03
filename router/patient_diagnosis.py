@@ -138,10 +138,13 @@ async def create_or_update_patient_diagnosis(
         if not doctor:
             raise HTTPException(status_code=400, detail="Active doctor not found")
         
+        # Handle appointment_id: treat 0 as None (no appointment)
+        appointment_id = diagnosis_data.appointment_id if diagnosis_data.appointment_id != 0 else None
+        
         # Validate appointment if provided
-        if diagnosis_data.appointment_id:
+        if appointment_id is not None:
             appointment = db.query(model.Appointment).filter(
-                model.Appointment.appointment_id == diagnosis_data.appointment_id
+                model.Appointment.appointment_id == appointment_id
             ).first()
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
@@ -151,7 +154,7 @@ async def create_or_update_patient_diagnosis(
             "facility_id": diagnosis_data.facility_id,
             "patient_id": diagnosis_data.patient_id,
             "DATE": diagnosis_data.diagnosis_date,
-            "appointment_id": diagnosis_data.appointment_id,
+            "appointment_id": appointment_id,  # Use the validated appointment_id (can be None)
             "doctor_id": diagnosis_data.doctor_id,
             "VITAL_BP": diagnosis_data.vital_bp,
             "VITAL_HR": diagnosis_data.vital_hr,
@@ -182,7 +185,6 @@ async def create_or_update_patient_diagnosis(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creating/updating diagnosis: {str(e)}")
-
 @router.get("/", tags=["patient-diagnosis"])
 async def get_patient_diagnosis(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
