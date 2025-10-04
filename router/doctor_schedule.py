@@ -233,8 +233,8 @@ class ScheduleCreate(BaseModel):
     # Changed from Optional to required fields
     startDate: date = Field(..., description="Start date for the schedule")
     endDate: date = Field(..., description="End date for the schedule") 
-    facilityId: int = Field(..., gt=0, description="Facility ID")
-    doctorId: int = Field(..., gt=0, description="Doctor ID")
+    facility_id: int = Field(..., gt=0, description="Facility ID")
+    doctor_id: int = Field(..., gt=0, description="Doctor ID")
     # Leave dates remain optional
     leaveStartDate: Optional[date] = Field(None, description="Leave start date (optional)")
     leaveEndDate: Optional[date] = Field(None, description="Leave end date (optional)")
@@ -269,8 +269,8 @@ class ScheduleCreate(BaseModel):
             "example": {
                 "startDate": "2025-09-01",
                 "endDate": "2025-12-31", 
-                "facilityId": 1,
-                "doctorId": 1,
+                "facility_id": 1,
+                "doctor_id": 1,
                 "leaveStartDate": "",
                 "leaveEndDate": "",
                 "weekDaysList": [
@@ -374,8 +374,8 @@ async def create_schedule(
                 "value": {
                     "startDate": "2025-09-01",
                     "endDate": "2025-12-31",
-                    "facilityId": 1,
-                    "doctorId": 1,
+                    "facility_id": 1,
+                    "doctor_id": 1,
                     "leaveStartDate": "",
                     "leaveEndDate": "",
                     "weekDaysList": [
@@ -488,8 +488,8 @@ async def create_schedule(
                         # call overlap handling which may update/delete existing rows
                         handle_schedule_overlap(
                             db,
-                            schedule.facilityId,
-                            schedule.doctorId,
+                            schedule.facility_id,
+                            schedule.doctor_id,
                             seg_start,
                             seg_end,
                             weekday,
@@ -501,8 +501,8 @@ async def create_schedule(
 
                         # create new schedule for this segment
                         new_schedule = model.DoctorSchedule(
-                            facility_id=schedule.facilityId,
-                            doctor_id=schedule.doctorId,
+                            facility_id=schedule.facility_id,
+                            doctor_id=schedule.doctor_id,
                             start_date=seg_start,
                             end_date=seg_end,
                             week_day=weekday,
@@ -532,14 +532,14 @@ async def create_schedule(
 
         db.commit()
 
-        logger.info(f"Created {len(created_schedules)} schedules for doctor {schedule.doctorId}")
+        logger.info(f"Created {len(created_schedules)} schedules for doctor {schedule.doctor_id}")
         
         # Convert the original payload to dict format for response
         original_payload = {
             "startDate": str(schedule.startDate),
             "endDate": str(schedule.endDate),
-            "facilityId": schedule.facilityId,
-            "doctorId": schedule.doctorId,
+            "facility_id": schedule.facility_id,
+            "doctor_id": schedule.doctor_id,
             "leaveStartDate": str(schedule.leaveStartDate) if schedule.leaveStartDate else "",
             "leaveEndDate": str(schedule.leaveEndDate) if schedule.leaveEndDate else "",
             "weekDaysList": [
@@ -624,8 +624,8 @@ async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(
         payload = {
             "startDate": str(overall_start),
             "endDate": str(overall_end),
-            "facilityId": facility_id,
-            "doctorId": doctor_id,
+            "facility_id": facility_id,
+            "doctor_id": doctor_id,
             "leaveStartDate": "",  # Leave dates not stored in current schema
             "leaveEndDate": "",    # Leave dates not stored in current schema
             "weekDaysList": weekdays_list

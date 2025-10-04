@@ -654,6 +654,12 @@ def dashboard_patient_lookup(
                     
                     status = "Cancelled" if apt.Cancelled else (apt.AppointmentStatus or ("Checked In" if apt.CheckinTime else "Scheduled"))
                     
+                    appointment_mode_display = apt.AppointmentMode
+                    if apt.AppointmentMode and apt.AppointmentMode.lower() == 'a':
+                        appointment_mode_display = 'APPOINTMENT'
+                    elif apt.AppointmentMode and apt.AppointmentMode.lower() == 'w':
+                        appointment_mode_display = 'WALKIN'
+                    
                     appointment_history.append({
                         "appointment_id": apt.appointment_id,
                         "date": apt.AppointmentDate.isoformat(),
@@ -662,7 +668,7 @@ def dashboard_patient_lookup(
                         "facility": facility_name,
                         "reason": apt.Reason,
                         "status": status,
-                        "mode": apt.AppointmentMode,
+                        "mode": appointment_mode_display,
                         "cancelled": apt.Cancelled,
                         "checkin_time": apt.CheckinTime.isoformat() if apt.CheckinTime else None,
                         "token_id": apt.TokenID,
