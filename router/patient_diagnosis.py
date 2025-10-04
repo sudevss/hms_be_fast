@@ -30,6 +30,7 @@ router = APIRouter(
 # Pydantic Models for Request/Response
 class PatientDiagnosisCreate(BaseModel):
     """Request model for creating/updating patient diagnosis - all fields included"""
+    diagnosis_id: Optional[int] = Field(None, description="Diagnosis ID for update, null for create")
     facility_id: int = Field(..., description="Facility ID where diagnosis was made")
     patient_id: int = Field(..., description="Patient ID")
     diagnosis_date: date = Field(..., description="Diagnosis date")
@@ -51,11 +52,12 @@ class PatientDiagnosisCreate(BaseModel):
         }
         json_schema_extra = {
             "example": {
-                "facility_id": 0,
-                "patient_id": 0,
+                "diagnosis_id": None,
+                "facility_id": 1,
+                "patient_id": 1,
                 "diagnosis_date": "2025-09-15",
-                "appointment_id": 0,
-                "doctor_id": 0,
+                "appointment_id": 1,
+                "doctor_id": 1,
                 "vital_bp": "120/80",
                 "vital_hr": "72",
                 "vital_temp": "98.6",
@@ -105,6 +107,9 @@ async def create_or_update_patient_diagnosis(
     """
     Create or update a patient diagnosis record.
     
+    If diagnosis_id is null: Creates a new diagnosis record
+    If diagnosis_id is provided: Updates the existing diagnosis record
+    
     All required fields must be provided:
     - facility_id: ID of the facility (required)
     - patient_id: ID of the patient (required)
@@ -146,36 +151,70 @@ async def create_or_update_patient_diagnosis(
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
         
-        # Convert lowercase field names to match the model
-        diagnosis_dict = {
-            "facility_id": diagnosis_data.facility_id,
-            "patient_id": diagnosis_data.patient_id,
-            "DATE": diagnosis_data.diagnosis_date,
-            "appointment_id": diagnosis_data.appointment_id,
-            "doctor_id": diagnosis_data.doctor_id,
-            "VITAL_BP": diagnosis_data.vital_bp,
-            "VITAL_HR": diagnosis_data.vital_hr,
-            "VITAL_TEMP": diagnosis_data.vital_temp,
-            "VITAL_SPO2": diagnosis_data.vital_spo2,
-            "CHIEF_COMPLAINT": diagnosis_data.chief_complaint,
-            "ASSESSMENT_NOTES": diagnosis_data.assessment_notes,
-            "TREATMENT_PLAN": diagnosis_data.treatment_plan,
-            "RECOMM_TESTS": diagnosis_data.recomm_tests,
-            "FOLLOWUP_DATE": diagnosis_data.followup_date
-        }
-        
-        # Create new diagnosis record
-        new_diagnosis = model.PatientDiagnosis(**diagnosis_dict)
-        
-        db.add(new_diagnosis)
-        db.commit()
-        db.refresh(new_diagnosis)
-        
-        return {
-            "status_code": 201,
-            "message": "Patient diagnosis created successfully",
-            "data": diagnosis_to_dict(new_diagnosis)
-        }
+        # Check if this is an update or create operation
+        if diagnosis_data.diagnosis_id is not None:
+            # UPDATE existing diagnosis
+            existing_diagnosis = db.query(model.PatientDiagnosis).filter(
+                model.PatientDiagnosis.diagnosis_id == diagnosis_data.diagnosis_id
+            ).first()
+            
+            if not existing_diagnosis:
+                raise HTTPException(status_code=404, detail="Diagnosis record not found")
+            
+            # Update fields
+            existing_diagnosis.facility_id = diagnosis_data.facility_id
+            existing_diagnosis.patient_id = diagnosis_data.patient_id
+            existing_diagnosis.DATE = diagnosis_data.diagnosis_date
+            existing_diagnosis.appointment_id = diagnosis_data.appointment_id
+            existing_diagnosis.doctor_id = diagnosis_data.doctor_id
+            existing_diagnosis.VITAL_BP = diagnosis_data.vital_bp
+            existing_diagnosis.VITAL_HR = diagnosis_data.vital_hr
+            existing_diagnosis.VITAL_TEMP = diagnosis_data.vital_temp
+            existing_diagnosis.VITAL_SPO2 = diagnosis_data.vital_spo2
+            existing_diagnosis.CHIEF_COMPLAINT = diagnosis_data.chief_complaint
+            existing_diagnosis.ASSESSMENT_NOTES = diagnosis_data.assessment_notes
+            existing_diagnosis.TREATMENT_PLAN = diagnosis_data.treatment_plan
+            existing_diagnosis.RECOMM_TESTS = diagnosis_data.recomm_tests
+            existing_diagnosis.FOLLOWUP_DATE = diagnosis_data.followup_date
+            
+            db.commit()
+            db.refresh(existing_diagnosis)
+            
+            return {
+                "status_code": 200,
+                "message": "Patient diagnosis updated successfully",
+                "data": diagnosis_to_dict(existing_diagnosis)
+            }
+        else:
+            # CREATE new diagnosis
+            diagnosis_dict = {
+                "facility_id": diagnosis_data.facility_id,
+                "patient_id": diagnosis_data.patient_id,
+                "DATE": diagnosis_data.diagnosis_date,
+                "appointment_id": diagnosis_data.appointment_id,
+                "doctor_id": diagnosis_data.doctor_id,
+                "VITAL_BP": diagnosis_data.vital_bp,
+                "VITAL_HR": diagnosis_data.vital_hr,
+                "VITAL_TEMP": diagnosis_data.vital_temp,
+                "VITAL_SPO2": diagnosis_data.vital_spo2,
+                "CHIEF_COMPLAINT": diagnosis_data.chief_complaint,
+                "ASSESSMENT_NOTES": diagnosis_data.assessment_notes,
+                "TREATMENT_PLAN": diagnosis_data.treatment_plan,
+                "RECOMM_TESTS": diagnosis_data.recomm_tests,
+                "FOLLOWUP_DATE": diagnosis_data.followup_date
+            }
+            
+            new_diagnosis = model.PatientDiagnosis(**diagnosis_dict)
+            
+            db.add(new_diagnosis)
+            db.commit()
+            db.refresh(new_diagnosis)
+            
+            return {
+                "status_code": 201,
+                "message": "Patient diagnosis created successfully",
+                "data": diagnosis_to_dict(new_diagnosis)
+            }
         
     except HTTPException:
         raise
@@ -189,7 +228,6 @@ async def get_patient_diagnosis(
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     doctor_id: Optional[int] = Query(None, description="Doctor ID (optional)"),
     diagnosis_date: Optional[date] = Query(None, description="Diagnosis date (optional)"),
-    diagnosis_id: Optional[int] = Query(None, description="Diagnosis ID (optional)"),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
@@ -202,7 +240,6 @@ async def get_patient_diagnosis(
     Optional parameters:
     - doctor_id: Filter by doctor ID
     - diagnosis_date: Filter by specific diagnosis date
-    - diagnosis_id: Filter by specific diagnosis ID
     
     Returns: JSON array of diagnosis records
     """
@@ -221,9 +258,6 @@ async def get_patient_diagnosis(
         
         if diagnosis_date is not None:
             query = query.filter(model.PatientDiagnosis.DATE == diagnosis_date)
-        
-        if diagnosis_id is not None:
-            query = query.filter(model.PatientDiagnosis.diagnosis_id == diagnosis_id)
         
         # Order by date (most recent first)
         query = query.order_by(model.PatientDiagnosis.DATE.desc())
