@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
@@ -337,6 +338,8 @@ def validate_doctor_availability(db: Session, doctor_id: int, facility_id: int, 
 def get_all_appointments(
     facility_id: int = Query(...),
     date: date = Query(...),
+    end_date: Optional[date] = Query(None),
+    patient_id: Optional[int] = Query(None),
     appointment_status: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
@@ -355,8 +358,22 @@ def get_all_appointments(
         .join(Doctors, Appointment.doctor_id == Doctors.id)
         .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
         .filter(Appointment.facility_id == facility_id)
-        .filter(Appointment.AppointmentDate == date)
     )
+    
+    # Apply date filtering
+    if end_date:
+        # Date range filter
+        query = query.filter(
+            Appointment.AppointmentDate >= date,
+            Appointment.AppointmentDate <= end_date
+        )
+    else:
+        # Single date filter
+        query = query.filter(Appointment.AppointmentDate == date)
+    
+    # Apply patient filter if provided
+    if patient_id:
+        query = query.filter(Appointment.patient_id == patient_id)
     
     if appointment_status:
         status_lower = appointment_status.lower()
@@ -392,6 +409,12 @@ def get_all_appointments(
             Appointment.CheckinTime == None,
             Appointment.Cancelled == False
         )
+    
+    # Order by most recent appointments first
+    query = query.order_by(
+        Appointment.AppointmentDate.desc(),
+        Appointment.AppointmentTime.desc()
+    )
     
     results = query.all()
     

@@ -305,7 +305,6 @@ async def upload_patient_report(
 async def get_patient_report_file(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
-    report_date: Date = Query(..., description="Report date (mandatory)"),
     upload_id: int = Query(..., description="Upload ID (mandatory)"),
     db: Session = Depends(get_db)
 ):
@@ -315,7 +314,6 @@ async def get_patient_report_file(
     Mandatory parameters:
     - facility_id: Filter by facility ID
     - patient_id: Filter by patient ID
-    - report_date: Filter by report date
     - upload_id: Filter by upload ID
     
     Returns: Binary file content for download
@@ -326,8 +324,7 @@ async def get_patient_report_file(
             and_(
                 model.PatientReports.upload_id == upload_id,
                 model.PatientReports.facility_id == facility_id,
-                model.PatientReports.patient_id == patient_id,
-                model.PatientReports.DATE == report_date
+                model.PatientReports.patient_id == patient_id
             )
         ).first()
         
