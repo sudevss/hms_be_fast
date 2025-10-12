@@ -40,6 +40,7 @@ class PatientDiagnosisCreate(BaseModel):
     vital_hr: Optional[str] = Field(None, max_length=50, description="Heart rate")
     vital_temp: Optional[str] = Field(None, max_length=50, description="Temperature")
     vital_spo2: Optional[str] = Field(None, max_length=50, description="Blood oxygen saturation")
+    weight: Optional[str] = Field(None, max_length=50, description="Patient weight")
     chief_complaint: Optional[str] = Field(None, description="Patient's chief complaint")
     assessment_notes: Optional[str] = Field(None, description="Doctor's assessment notes")
     treatment_plan: Optional[str] = Field(None, description="Prescribed treatment plan")
@@ -62,6 +63,7 @@ class PatientDiagnosisCreate(BaseModel):
                 "vital_hr": "72",
                 "vital_temp": "98.6",
                 "vital_spo2": "99",
+                "weight": "70.5",
                 "chief_complaint": "Chest pain and shortness of breath",
                 "assessment_notes": "Patient presents with mild chest discomfort, likely muscular strain",
                 "treatment_plan": "Rest, pain medication as needed, follow-up in 1 week",
@@ -84,6 +86,7 @@ def diagnosis_to_dict(diagnosis) -> Dict[str, Any]:
         "vital_hr": diagnosis.VITAL_HR,
         "vital_temp": diagnosis.VITAL_TEMP,
         "vital_spo2": diagnosis.VITAL_SPO2,
+        "weight": diagnosis.weight,
         "chief_complaint": diagnosis.CHIEF_COMPLAINT,
         "assessment_notes": diagnosis.ASSESSMENT_NOTES,
         "treatment_plan": diagnosis.TREATMENT_PLAN,
@@ -171,6 +174,7 @@ async def create_or_update_patient_diagnosis(
             existing_diagnosis.VITAL_HR = diagnosis_data.vital_hr
             existing_diagnosis.VITAL_TEMP = diagnosis_data.vital_temp
             existing_diagnosis.VITAL_SPO2 = diagnosis_data.vital_spo2
+            existing_diagnosis.weight = diagnosis_data.weight
             existing_diagnosis.CHIEF_COMPLAINT = diagnosis_data.chief_complaint
             existing_diagnosis.ASSESSMENT_NOTES = diagnosis_data.assessment_notes
             existing_diagnosis.TREATMENT_PLAN = diagnosis_data.treatment_plan
@@ -197,6 +201,7 @@ async def create_or_update_patient_diagnosis(
                 "VITAL_HR": diagnosis_data.vital_hr,
                 "VITAL_TEMP": diagnosis_data.vital_temp,
                 "VITAL_SPO2": diagnosis_data.vital_spo2,
+                "weight": diagnosis_data.weight,
                 "CHIEF_COMPLAINT": diagnosis_data.chief_complaint,
                 "ASSESSMENT_NOTES": diagnosis_data.assessment_notes,
                 "TREATMENT_PLAN": diagnosis_data.treatment_plan,
