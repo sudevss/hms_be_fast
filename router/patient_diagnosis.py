@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from datetime import date
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, APIRouter, Depends, Query
 from sqlalchemy import and_
@@ -49,6 +49,14 @@ class PatientDiagnosisCreate(BaseModel):
     recomm_tests: Optional[str] = Field(None, description="Recommended tests")
     followup_date: Optional[date] = Field(None, description="Follow-up appointment date")
 
+    @field_validator('appointment_id', 'diagnosis_id')
+    @classmethod
+    def validate_optional_ids(cls, v):
+        """Convert 0 to None for optional foreign key fields"""
+        if v == 0:
+            return None
+        return v
+
     class Config:
         json_encoders = {
             date: lambda v: v.isoformat() if v else None
@@ -56,11 +64,11 @@ class PatientDiagnosisCreate(BaseModel):
         json_schema_extra = {
             "example": {
                 "diagnosis_id": None,
-                "facility_id": 0,
-                "patient_id": 0,
+                "facility_id": 1,
+                "patient_id": 1,
                 "diagnosis_date": "2025-09-15",
-                "appointment_id": 0,
-                "doctor_id": 0,
+                "appointment_id": None,
+                "doctor_id": 1,
                 "vital_bp": "120/80",
                 "vital_hr": "72",
                 "vital_temp": "98.6",
