@@ -273,6 +273,8 @@ async def get_all_doctors(
     - By default, only returns active and non-deleted doctors
     - Set include_inactive=true to include inactive doctors
     - Deleted doctors are never returned
+    - Regular users can only see doctors from their own facility
+    - Super admins can see all doctors or filter by facility_id
     """
     try:
         query = db.query(model.Doctors).options(joinedload(model.Doctors.doctor_schedules))
@@ -283,8 +285,12 @@ async def get_all_doctors(
         # Filter by active status unless explicitly requested to include inactive
         if not include_inactive:
             query = query.filter(model.Doctors.is_active == True)
-            
-        if facility_id is not None:
+        
+        # For regular users (non-super admins), restrict to their facility only
+        if not current_user.is_super_admin():
+            query = query.filter(model.Doctors.facility_id == current_user.facility_id)
+        # For super admins, allow optional facility filtering
+        elif facility_id is not None:
             query = query.filter(model.Doctors.facility_id == facility_id)
             
         doctors = query.all()
@@ -325,15 +331,26 @@ async def get_doctor_by_id(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get doctor by ID (only if not soft deleted)"""
+    """
+    Get doctor by ID (only if not soft deleted)
+    - Regular users can only access doctors from their own facility
+    - Super admins can access any doctor
+    """
     try:
-        doctor = (
+        query = (
             db.query(model.Doctors)
             .filter(model.Doctors.id == doctor_id)
             .filter(model.Doctors.is_deleted == False)  # Filter out soft deleted doctors
-            .options(joinedload(model.Doctors.doctor_schedules), joinedload(model.Doctors.facility))
-            .first()
         )
+        
+        # For regular users, restrict to their facility only
+        if not current_user.is_super_admin():
+            query = query.filter(model.Doctors.facility_id == current_user.facility_id)
+        
+        doctor = query.options(
+            joinedload(model.Doctors.doctor_schedules), 
+            joinedload(model.Doctors.facility)
+        ).first()
 
         if not doctor:
             raise HTTPException(status_code=404, detail="Doctor not found")
@@ -392,6 +409,10 @@ async def add_new_doctor(
     db: Session = Depends(get_db)
 ):
     try:
+        # For regular users, enforce their facility_id
+        if not current_user.is_super_admin():
+            doctor.facility_id = current_user.facility_id
+        
         if doctor.facility_id:
             facility = db.query(model.Facility).filter(model.Facility.facility_id == doctor.facility_id).first()
             if not facility:
@@ -431,10 +452,16 @@ async def edit_doctor_details(
     db: Session = Depends(get_db)
 ):
     try:
-        existing_doctor = db.query(model.Doctors).filter(
+        query = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
             model.Doctors.is_deleted == False  # Only allow updates for non-deleted doctors
-        ).first()
+        )
+        
+        # For regular users, restrict to their facility only
+        if not current_user.is_super_admin():
+            query = query.filter(model.Doctors.facility_id == current_user.facility_id)
+        
+        existing_doctor = query.first()
         
         if not existing_doctor:
             raise get_postnotfound_exception()
@@ -466,7 +493,10 @@ async def edit_doctor_details(
         # Validate facility_id only if it's provided and truthy
         if "facility_id" in filtered_data:
             facility_id = filtered_data.get("facility_id")
-            if facility_id:
+            # For regular users, prevent changing facility_id
+            if not current_user.is_super_admin():
+                filtered_data.pop("facility_id")
+            elif facility_id:
                 facility = db.query(model.Facility).filter(
                     model.Facility.facility_id == facility_id
                 ).first()
@@ -519,12 +549,22 @@ async def delete_doctor_details(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Soft delete doctor by setting is_deleted=True"""
+    """
+    Soft delete doctor by setting is_deleted=True
+    - Regular users can only delete doctors from their own facility
+    - Super admins can delete any doctor
+    """
     try:
-        req_doc = db.query(model.Doctors).filter(
+        query = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
             model.Doctors.is_deleted == False  # Only allow deletion of non-deleted doctors
-        ).first()
+        )
+        
+        # For regular users, restrict to their facility only
+        if not current_user.is_super_admin():
+            query = query.filter(model.Doctors.facility_id == current_user.facility_id)
+        
+        req_doc = query.first()
         
         if not req_doc:
             raise get_postnotfound_exception()
@@ -548,12 +588,22 @@ async def restore_doctor(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Restore a soft deleted doctor"""
+    """
+    Restore a soft deleted doctor
+    - Regular users can only restore doctors from their own facility
+    - Super admins can restore any doctor
+    """
     try:
-        doctor = db.query(model.Doctors).filter(
+        query = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
             model.Doctors.is_deleted == True  # Only restore deleted doctors
-        ).first()
+        )
+        
+        # For regular users, restrict to their facility only
+        if not current_user.is_super_admin():
+            query = query.filter(model.Doctors.facility_id == current_user.facility_id)
+        
+        doctor = query.first()
         
         if not doctor:
             raise HTTPException(status_code=404, detail="Deleted doctor not found")
