@@ -47,6 +47,7 @@ class Doctors(Base):
     appointments = relationship("Appointment", back_populates="doctor")
     medical_records = relationship("MedicalRecord", back_populates="doctor")
     medical_documents = relationship("MedicalDocument", back_populates="doctor")
+
 class Patients(Base):
     __tablename__ = "patients"
 
@@ -91,14 +92,19 @@ class UserMaster(Base):
 
     facility = relationship("Facility", back_populates="users")
 
-# class Admin(Base):
-#     __tablename__ = "admin"
+class Admin(Base):
+    """
+    Super Admin Model - Fixed version
+    Primary Key: username
+    """
+    __tablename__ = "admin"
 
-#     username = Column(String(50), primary_key=True, index=True)  # Added length - THIS WAS THE MAIN ERROR
-#     hashed_pass = Column(String(255))                            # Added length for hashed passwords
-#     facility_id = Column(Integer, ForeignKey("facility.facility_id"))
+    username = Column(String(50), primary_key=True, index=True)
+    hashed_pass = Column(String(255), nullable=False)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
 
-#     facility = relationship("Facility")
+    # Relationships
+    facility = relationship("Facility")
 
 class DoctorSchedule(Base):
     __tablename__ = "doctor_schedule"
@@ -115,11 +121,12 @@ class DoctorSchedule(Base):
 
     facility = relationship("Facility", back_populates="doctor_schedules")
     doctor = relationship("Doctors", back_populates="doctor_schedules")
+
 class DoctorBookedSlots(Base):
     __tablename__ = "doctor_booked_slots"
 
     DCID = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    Doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)   # ✅ FIXED
+    Doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
     Facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False, index=True)
     Slot_date = Column(Date, nullable=False, index=True)
     Start_Time = Column(Time, nullable=False)
@@ -131,7 +138,7 @@ class DoctorBookedSlots(Base):
     facility = relationship("Facility", back_populates="booked_slots")
     appointments = relationship("Appointment", back_populates="booked_slot")
 
-    _table_args_ = (
+    __table_args__ = (
         CheckConstraint("Start_Time < End_Time", name="check_time_order"),
         CheckConstraint("Booked_status IN ('Booked','Not Booked')", name="check_booked_status"),
         Index("idx_doctor_facility_date", "Doctor_id", "Facility_id", "Slot_date"),
@@ -140,7 +147,6 @@ class DoctorBookedSlots(Base):
             name="unique_doctor_slot"
         ),
     )
-
 
 class Appointment(Base):
     __tablename__ = "appointment"
@@ -158,7 +164,7 @@ class Appointment(Base):
     Reason = Column(String(200), nullable=False)
     CheckinTime = Column(DateTime)
     Cancelled = Column(Boolean, nullable=False, default=False)
-    TokenID = Column(String(20))  # no more unique=True
+    TokenID = Column(String(20))
     AppointmentMode = Column(String(50), nullable=False)
     AppointmentStatus = Column(String(50), nullable=False, default="Scheduled")
 
@@ -168,7 +174,7 @@ class Appointment(Base):
     facility = relationship("Facility", back_populates="appointments")
     booked_slot = relationship("DoctorBookedSlots", back_populates="appointments")
 
-    _table_args_ = (
+    __table_args__ = (
         CheckConstraint("AppointmentMode IN ('a','A','w','W')", name="check_appointment_mode"),
         CheckConstraint("AppointmentStatus IN ('Scheduled','Waiting','Completed','Cancelled')",
                         name="check_appointment_status"),
@@ -176,9 +182,6 @@ class Appointment(Base):
             "payment_method IN ('Cash','Debit Card','Credit Card','UPI','Net Banking')",
             name="check_payment_method"
         ),
-        Index("idx_patient_date", "patient_id", "AppointmentDate"),
-        Index("idx_doctor_date", "doctor_id", "AppointmentDate"),
-        Index("idx_facility_date", "facility_id", "AppointmentDate"),
         Index("idx_patient_date", "patient_id", "AppointmentDate"),
         Index("idx_doctor_date", "doctor_id", "AppointmentDate"),
         Index("idx_facility_date", "facility_id", "AppointmentDate"),
@@ -219,10 +222,8 @@ class Billing(Base):
     appointment = relationship("Appointment")
     facility = relationship("Facility")
 
-
-
 class MedicalDocument(Base):
-    __tablename__ = "medical_document"  # Fixed: was tablename
+    __tablename__ = "medical_document"
 
     document_id = Column(Integer, primary_key=True, index=True)
     appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
@@ -236,8 +237,6 @@ class MedicalDocument(Base):
     patient = relationship("Patients", back_populates="medical_documents")
     doctor = relationship("Doctors", back_populates="medical_documents")
     facility = relationship("Facility")
-
-
 
 class PatientDiagnosis(Base):
     __tablename__ = "patient_diagnosis"
@@ -257,6 +256,8 @@ class PatientDiagnosis(Base):
     TREATMENT_PLAN = Column(Text)
     RECOMM_TESTS = Column(Text)
     FOLLOWUP_DATE = Column(Date)
+    weight = Column(String(50))
+    height = Column(String(50))
 
     # Relationships
     facility = relationship("Facility")
@@ -269,19 +270,17 @@ class PatientDiagnosis(Base):
         Index("idx_facility_patient", "facility_id", "patient_id"),
     )
 
-
-
 class PatientReports(Base):
     __tablename__ = "patient_reports"
 
-    upload_id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # Generated automatically on upload
+    upload_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     DATE = Column(Date, nullable=False)
     appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
     diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"))
     FILENAME = Column(Text, nullable=False)
-    FILE_BLOB = Column(sa.LargeBinary)  # BLOB type for storing file data
+    FILE_BLOB = Column(sa.LargeBinary)
 
     # Relationships
     facility = relationship("Facility")
