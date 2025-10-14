@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
@@ -10,6 +9,7 @@ import pytz
 
 from database import get_db
 from router.new_booking import update_slot_booking_status
+from auth_middleware import get_current_user, require_roles, CurrentUser
 
 router = APIRouter(
     prefix="/appointments",
@@ -138,6 +138,10 @@ class PaymentRequest(BaseModel):
         from_attributes = True
 
 
+class CompleteRequest(BaseModel):
+    pass
+
+
 class AppointmentResponse(BaseModel):
     appointment_id: int
     patient_id: int
@@ -190,6 +194,15 @@ class PaymentResponse(BaseModel):
     appointment_id: int
     payment_status: bool
     payment_method: Optional[str]
+    appointment_status: str
+    message: str
+
+    class Config:
+        from_attributes = True
+
+
+class CompleteResponse(BaseModel):
+    appointment_id: int
     appointment_status: str
     message: str
 
@@ -341,8 +354,13 @@ def get_all_appointments(
     end_date: Optional[date] = Query(None),
     patient_id: Optional[int] = Query(None),
     appointment_status: Optional[str] = Query(None),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     query = (
         db.query(
             Appointment,
@@ -458,8 +476,13 @@ def get_all_appointments(
 def get_appointment(
     appointment_id: int,
     facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     result = (
         db.query(
             Appointment,
@@ -522,8 +545,13 @@ def get_appointment(
 @router.post("/", response_model=AppointmentResponse)
 def create_appointment(
     appointment: AppointmentCreate,
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != appointment.facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     payload = appointment.dict(exclude_unset=True)
 
     payload["Cancelled"] = False
@@ -636,8 +664,13 @@ def create_appointment(
 def checkin_appointment(
     appointment_id: int,
     facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     appt = (
         db.query(Appointment)
         .filter(
@@ -721,8 +754,13 @@ def cancel_appointment(
     appointment_id: int,
     cancel_request: CancelRequest = CancelRequest(),
     facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     appt = (
         db.query(Appointment)
         .filter(
@@ -770,8 +808,13 @@ def update_payment_status(
     appointment_id: int,
     payment_request: PaymentRequest,
     facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     appt = (
         db.query(Appointment)
         .filter(
@@ -799,13 +842,11 @@ def update_payment_status(
             appt.payment_method = payment_request.payment_method
 
         appt.payment_status = payment_request.payment_status
-
-        appt.AppointmentStatus = "Completed"
         
         if payment_request.payment_status:
-            message = "Payment processed successfully. Appointment completed."
+            message = "Payment processed successfully"
         else:
-            message = "Payment marked as pending. Appointment completed."
+            message = "Payment marked as pending"
 
         db.commit()
         db.refresh(appt)
@@ -823,13 +864,64 @@ def update_payment_status(
         raise HTTPException(status_code=500, detail=f"Error updating payment status: {str(e)}")
 
 
+@router.post("/{appointment_id}/complete", response_model=CompleteResponse)
+def complete_appointment(
+    appointment_id: int,
+    facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
+    appt = (
+        db.query(Appointment)
+        .filter(
+            Appointment.appointment_id == appointment_id,
+            Appointment.facility_id == facility_id
+        )
+        .first()
+    )
+    
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    if appt.Cancelled:
+        raise HTTPException(status_code=400, detail="Cannot complete cancelled appointment")
+    
+    if appt.AppointmentStatus == "Completed":
+        raise HTTPException(status_code=400, detail="Appointment is already completed")
+
+    try:
+        appt.AppointmentStatus = "Completed"
+
+        db.commit()
+        db.refresh(appt)
+
+        return CompleteResponse(
+            appointment_id=appt.appointment_id,
+            appointment_status="Completed",
+            message="Appointment completed successfully"
+        )
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error completing appointment: {str(e)}")
+
+
 @router.patch("/{appointment_id}", response_model=AppointmentResponse)
 def update_appointment(
     appointment_id: int,
     updated: AppointmentUpdate,
     facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     appt = (
         db.query(Appointment)
         .filter(
@@ -1000,8 +1092,13 @@ def update_appointment(
 def delete_appointment(
     appointment_id: int,
     facility_id: int = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     appt = (
         db.query(Appointment)
         .filter(
@@ -1034,8 +1131,13 @@ def get_doctor_schedule(
     facility_id: int = Query(...),
     start_date: date = Query(...),
     end_date: date = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     schedules = (
         db.query(DoctorSchedule)
         .filter(
@@ -1072,8 +1174,13 @@ def get_patient_payment_reports(
     patient_id: int = Query(..., description="Patient ID"),
     facility_id: int = Query(..., description="Facility ID"),
     limit: Optional[int] = Query(None, description="Limit number of visits (optional)"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     query = (
         db.query(
             Appointment,
@@ -1170,8 +1277,13 @@ def get_patient_appointments(
     patient_id: int,
     facility_id: int = Query(...),
     appointment_status: Optional[str] = Query(None),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Verify user belongs to the requested facility
+    if current_user.facility_id != facility_id and current_user.facility_id != 0:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your facility's data.")
+    
     query = (
         db.query(
             Appointment,

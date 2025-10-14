@@ -10,6 +10,9 @@ from typing import Optional, List, Dict
 import time as time_module
 import logging
 
+# Import authentication dependencies
+from auth_middleware import get_current_user, CurrentUser
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -284,9 +287,21 @@ def is_slot_available(db: Session, facility_id: int, doctor_id: int,
         return False
 
 @router.get("/details", response_model=AppointmentDetailsResponse_Original)
-def get_appointment_details(FacilityID: int = Query(...), date: date = Query(...), db: Session = Depends(get_db)):
+def get_appointment_details(
+    FacilityID: int = Query(...),
+    date: date = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     start_time = time_module.time()
     logger.info(f"Starting appointment details query for facility {FacilityID} on {date}")
+    
+    # Verify user has access to this facility (unless super admin)
+    if not current_user.is_super_admin() and current_user.facility_id != FacilityID:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have access to this facility's data"
+        )
     
     try:
         # Optimized hourly data query
@@ -351,10 +366,18 @@ async def get_doctor_details_for_dashboard(
     date: date = Query(..., description="Date in YYYY-MM-DD format"),
     doctor_id: Optional[int] = Query(None, description="Optional Doctor ID for filtering"),
     DoctorName: Optional[str] = Query(None, description="Optional Doctor Name for filtering"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     start_time = time_module.time()
     logger.info(f"Starting doctor dashboard query for facility {facility_id} on {date}")
+    
+    # Verify user has access to this facility (unless super admin)
+    if not current_user.is_super_admin() and current_user.facility_id != facility_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have access to this facility's data"
+        )
     
     try:
         day_of_week = get_day_of_week(date)
@@ -880,6 +903,7 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
 async def get_checkin_details_for_dashboard(
     FacilityID: int = Query(..., description="Facility ID"),
     Date: date = Query(..., description="Date in YYYY-MM-DD format (e.g., 2025-07-26)"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -887,6 +911,13 @@ async def get_checkin_details_for_dashboard(
     """
     start_time = time_module.time()
     logger.info(f"Starting checkin details query for facility {FacilityID} on {Date}")
+    
+    # Verify user has access to this facility (unless super admin)
+    if not current_user.is_super_admin() and current_user.facility_id != FacilityID:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have access to this facility's data"
+        )
     
     try:
         day_of_week = get_day_of_week(Date)

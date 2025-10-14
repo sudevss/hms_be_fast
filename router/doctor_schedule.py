@@ -8,6 +8,7 @@ import logging
 # Import your SQLAlchemy setup
 from database import get_db
 import model
+from auth_middleware import get_current_user, CurrentUser, require_admin_role
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -440,6 +441,7 @@ async def create_schedule(
             }
         }
     ), 
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create new schedules with overlap handling and honor leave ranges."""
@@ -573,7 +575,12 @@ async def create_schedule(
         raise HTTPException(status_code=500, detail=f"Error creating schedule: {str(e)}")
 
 @router.get("/{facility_id}/{doctor_id}", response_model=Dict)
-async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(get_db)):
+async def get_schedules(
+    facility_id: int, 
+    doctor_id: int, 
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Get schedules for a doctor in a facility in the same payload format as create"""
     try:
         schedules = db.query(model.DoctorSchedule).filter(
@@ -640,7 +647,15 @@ async def get_schedules(facility_id: int, doctor_id: int, db: Session = Depends(
         raise HTTPException(status_code=500, detail=f"Error getting schedules: {str(e)}")
 
 @router.delete("/{facility_id}/{doctor_id}/{start_date}/{end_date}/{window_num}", response_model=Dict)
-async def delete_schedule(facility_id: int, doctor_id: int, start_date: date, end_date: date, window_num: int, db: Session = Depends(get_db)):
+async def delete_schedule(
+    facility_id: int, 
+    doctor_id: int, 
+    start_date: date, 
+    end_date: date, 
+    window_num: int, 
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Delete a schedule"""
     try:
         if end_date < start_date:
@@ -671,7 +686,14 @@ async def delete_schedule(facility_id: int, doctor_id: int, start_date: date, en
 
 
 @router.get("/availability/{facility_id}/{doctor_id}/{start_date}/{end_date}", response_model=AvailabilityResponse)
-async def check_doctor_availability(facility_id: int, doctor_id: int, start_date: date, end_date: date, db: Session = Depends(get_db)):
+async def check_doctor_availability(
+    facility_id: int, 
+    doctor_id: int, 
+    start_date: date, 
+    end_date: date, 
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Check doctor availability between start_date and end_date"""
     try:
         if end_date < start_date:

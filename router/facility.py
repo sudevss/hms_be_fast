@@ -4,6 +4,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from database import get_db
 from model import Facility
+from auth_middleware import get_current_user, require_admin_role, CurrentUser
 
 router = APIRouter(
     prefix="/facility",
@@ -33,18 +34,29 @@ def get_notfound_exception():
     return HTTPException(status_code=404, detail="Facility not found")
 
 @router.get("/", response_model=List[FacilityResponse])
-def get_all_facilities(db: Session = Depends(get_db)):
+def get_all_facilities(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     return db.query(Facility).all()
 
 @router.get("/{facility_id}", response_model=FacilityResponse)
-def get_facility(facility_id: int, db: Session = Depends(get_db)):
+def get_facility(
+    facility_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     facility = db.query(Facility).filter(Facility.facility_id == facility_id).first()
     if not facility:
         raise HTTPException(status_code=404, detail="Facility not found")
     return facility
 
 @router.post("/", response_model=FacilityResponse)
-def create_facility(facility: FacilityBase, db: Session = Depends(get_db)):
+def create_facility(
+    facility: FacilityBase,
+    current_user: CurrentUser = Depends(require_admin_role),
+    db: Session = Depends(get_db)
+):
     new_facility = Facility(**facility.dict())
     db.add(new_facility)
     db.commit()
@@ -56,6 +68,7 @@ async def update_facility(
     facility_id: int,
     facility: FacilityUpdateSchema = None,
     background_tasks: BackgroundTasks = None,
+    current_user: CurrentUser = Depends(require_admin_role),
     db: Session = Depends(get_db)
 ):
     try:
@@ -106,7 +119,11 @@ async def update_facility(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.delete("/{facility_id}")
-def delete_facility(facility_id: int, db: Session = Depends(get_db)):
+def delete_facility(
+    facility_id: int,
+    current_user: CurrentUser = Depends(require_admin_role),
+    db: Session = Depends(get_db)
+):
     facility = db.query(Facility).filter(Facility.facility_id == facility_id).first()
     if not facility:
         raise HTTPException(status_code=404, detail="Facility not found")

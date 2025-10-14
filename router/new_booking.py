@@ -7,6 +7,7 @@ import re
 
 from database import get_db
 import model
+from auth_middleware import get_current_user, CurrentUser
 
 router = APIRouter(prefix="/new_booking", tags=["new_booking"])
 
@@ -293,7 +294,7 @@ class DashboardAppointmentCreate(BaseModel):
                 "doctor_id": 0,
                 "facility_id": 0,
                 "AppointmentDate": str(date.today()),
-                "AppointmentTime": "",   # <-- empty string shown in docs
+                "AppointmentTime": "",
                 "Reason": "string",
                 "AppointmentMode": "A",
                 "room_id": 0,
@@ -305,9 +306,7 @@ class DashboardAppointmentCreate(BaseModel):
     @validator('AppointmentTime', pre=True)
     def parse_time(cls, v):
         if v is None or v == "":
-            # Allow blank in example / docs, but runtime requests must provide a real time
             raise ValueError("AppointmentTime is required")
-        # Strings like "9am" or "14:30" handled here
         if isinstance(v, str):
             return parse_time_string(v)
         if isinstance(v, datetime):
@@ -402,7 +401,7 @@ class QuickAppointmentCreate(BaseModel):
                 "doctor_id": 0,
                 "facility_id": 0,
                 "AppointmentDate": str(date.today()),
-                "AppointmentTime": "",   # <-- empty string shown in docs
+                "AppointmentTime": "",
                 "Reason": "string",
                 "AppointmentMode": "A",
                 "room_id": 1,
@@ -469,7 +468,7 @@ def dashboard_book_appointment(
             "doctor_id": 0,
             "facility_id": 0,
             "AppointmentDate": str(date.today()),
-            "AppointmentTime": "",   # <-- EMPTY in docs
+            "AppointmentTime": "",
             "Reason": "string",
             "AppointmentMode": "A",
             "room_id": 0,
@@ -477,9 +476,10 @@ def dashboard_book_appointment(
             "payment_method": "Cash"
         }
     ),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Enhanced Dashboard API: Books appointment with proper validation flow"""
+    """Enhanced Dashboard API: Books appointment with proper validation flow (Requires Authentication)"""
     try:
         schedule_valid, schedule_message = check_doctor_schedule_enhanced(
             db, booking_data.doctor_id, booking_data.facility_id, 
@@ -613,9 +613,10 @@ def dashboard_book_appointment(
 def dashboard_patient_lookup(
     phone_number: str = Query(..., description="Patient phone number"),
     facility_id: Optional[int] = Query(None, alias="facility_id", description="Filter by specific facility"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lookup ALL patients registered with the same phone number"""
+    """Lookup ALL patients registered with the same phone number (Requires Authentication)"""
     try:
         clean_phone = re.sub(r'[^\d]', '', phone_number)
         if len(clean_phone) != 10:
@@ -738,7 +739,7 @@ def book_appointment_for_existing_patient(
             "doctor_id": 0,
             "facility_id": 0,
             "AppointmentDate": str(date.today()),
-            "AppointmentTime": "",   # <-- EMPTY in docs
+            "AppointmentTime": "",
             "Reason": "string",
             "AppointmentMode": "A",
             "room_id": 1,
@@ -746,9 +747,10 @@ def book_appointment_for_existing_patient(
             "payment_method": "Cash"
         }
     ),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Enhanced Quick booking for existing patients using patient_id"""
+    """Enhanced Quick booking for existing patients using patient_id (Requires Authentication)"""
     try:
         schedule_valid, schedule_message = check_doctor_schedule_enhanced(
             db, booking_data.doctor_id, booking_data.facility_id,

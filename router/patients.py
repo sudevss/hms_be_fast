@@ -7,7 +7,9 @@ from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, Query, 
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-# from .auth import get_current_user, get_user_exception
+# Import authentication middleware
+from auth_middleware import get_current_user, require_same_facility, CurrentUser
+
 import model
 from database import Base, engine, SessionLocal
 from .doctors import doctor_response
@@ -22,8 +24,19 @@ import os
 import asyncio
 from functools import lru_cache
 
+# Load from environment variables
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+
+# Email configuration
+MAIL_USERNAME = os.getenv("MAIL_USERNAME", "divyanshnumb@gmail.com")
+MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "jbomvyfqjcxtixrz")
+MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
+MAIL_PORT = int(os.getenv("MAIL_PORT", "465"))
+
+# Warn if using default credentials
+if MAIL_PASSWORD == "jbomvyfqjcxtixrz":
+    print("⚠️  WARNING: Using default email credentials. Set MAIL_USERNAME and MAIL_PASSWORD environment variables!")
 
 class EmailSchema(BaseModel):
     email: List[EmailStr]
@@ -46,10 +59,10 @@ class PatientUpdateSchema(BaseModel):
 @lru_cache()
 def get_mail_config():
     return ConnectionConfig(
-        MAIL_USERNAME="divyanshnumb@gmail.com",
-        MAIL_PASSWORD="jbomvyfqjcxtixrz",
-        MAIL_PORT=465,
-        MAIL_SERVER="smtp.gmail.com",
+        MAIL_USERNAME=MAIL_USERNAME,
+        MAIL_PASSWORD=MAIL_PASSWORD,
+        MAIL_PORT=MAIL_PORT,
+        MAIL_SERVER=MAIL_SERVER,
         MAIL_STARTTLS=False,
         MAIL_SSL_TLS=True,
         USE_CREDENTIALS=True,
@@ -120,9 +133,19 @@ class VerifyOrder(BaseModel):
     order_id: str
 
 @router.get("/", tags=["patients"])
-async def get_all_patients(facility_id: int = Query(..., description="Facility ID to filter patients"), 
-                          db: Session = Depends(get_db)):
+async def get_all_patients(
+    current_user: CurrentUser = Depends(get_current_user),
+    facility_id: int = Query(..., description="Facility ID to filter patients"), 
+    db: Session = Depends(get_db)
+):
     try:
+        # Verify user has access to this facility
+        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied. You can only access patients from your facility."
+            )
+        
         # Get all patients for the facility
         patients = db.query(model.Patients).filter(
             model.Patients.facility_id == facility_id
@@ -174,14 +197,26 @@ async def get_all_patients(facility_id: int = Query(..., description="Facility I
             result.append(patient_dict)
         
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/{patient_id}", tags=["patients"])
-async def get_patient_byid(patient_id: int, 
-                          facility_id: int = Query(..., description="Facility ID"), 
-                          db: Session = Depends(get_db)):
+async def get_patient_byid(
+    patient_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    facility_id: int = Query(..., description="Facility ID"), 
+    db: Session = Depends(get_db)
+):
     try:
+        # Verify user has access to this facility
+        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied. You can only access patients from your facility."
+            )
+        
         patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
             model.Patients.facility_id == facility_id
@@ -289,10 +324,20 @@ async def send_mail_background(email_list: List[str], name: str, room_no: int):
 
 
 @router.post("/", tags=["patients"])
-async def add_new_patient(patient: ui_patient, 
-                         background_tasks: BackgroundTasks,
-                         db: Session = Depends(get_db)):
+async def add_new_patient(
+    patient: ui_patient,
+    current_user: CurrentUser = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db)
+):
     try:
+        # Verify user has access to this facility
+        if not current_user.is_super_admin() and current_user.facility_id != patient.facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied. You can only add patients to your facility."
+            )
+        
         patient_model = model.Patients(
             firstname=patient.firstname,
             lastname=patient.lastname,
@@ -314,7 +359,8 @@ async def add_new_patient(patient: ui_patient,
         
         # Add email sending as background task to avoid blocking
         full_name = f"{patient.firstname} {patient.lastname}"
-        background_tasks.add_task(send_mail_background, [patient.email_id], full_name, patient.room_id)
+        if background_tasks:
+            background_tasks.add_task(send_mail_background, [patient.email_id], full_name, patient.room_id)
         
         return successful_response(201)
     except HTTPException:
@@ -326,12 +372,20 @@ async def add_new_patient(patient: ui_patient,
 @router.api_route("/{patient_id}", methods=["PATCH"], tags=["patients"])
 async def update_patient(
     patient_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
     facility_id: int = Query(..., description="Facility ID"),
     patient: PatientUpdateSchema = None, 
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     try:
+        # Verify user has access to this facility
+        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied. You can only update patients from your facility."
+            )
+        
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
             model.Patients.facility_id == facility_id
@@ -439,10 +493,20 @@ async def update_patient(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.delete("/", tags=["patients"])
-async def delete_patient_details(patient_id: int = Query(..., description="Patient ID"),
-                                facility_id: int = Query(..., description="Facility ID"),
-                                db: Session = Depends(get_db)):
+async def delete_patient_details(
+    current_user: CurrentUser = Depends(get_current_user),
+    patient_id: int = Query(..., description="Patient ID"),
+    facility_id: int = Query(..., description="Facility ID"),
+    db: Session = Depends(get_db)
+):
     try:
+        # Verify user has access to this facility
+        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied. You can only delete patients from your facility."
+            )
+        
         # Single query to check existence and delete
         deleted_count = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
@@ -480,14 +544,19 @@ def get_razorpay_client():
         if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
             return razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
         else:
-            print("Razorpay keys not configured")
+            print("⚠️  Razorpay keys not configured")
             return None
     except Exception as e:
-        print(f"Razorpay client initialization failed: {str(e)}")
+        print(f"❌ Razorpay client initialization failed: {str(e)}")
         return None
 
 @router.post("/create_order", response_model=patient_payment, tags=["patients"])
-async def create_order(input: CreateOrder, id: int, db: Session = Depends(get_db)):
+async def create_order(
+    input: CreateOrder, 
+    id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     try:
         client = get_razorpay_client()
         if not client:
@@ -496,6 +565,13 @@ async def create_order(input: CreateOrder, id: int, db: Session = Depends(get_db
         patient = db.query(model.Patients).filter(model.Patients.id == id).first()
         if not patient:
             raise HTTPException(status_code=404, detail="Patient not found")
+        
+        # Verify user has access to this patient's facility
+        if not current_user.is_super_admin() and current_user.facility_id != patient.facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied. You can only create orders for patients from your facility."
+            )
 
         payment = client.order.create({
             'amount': input.amount * 100, 
@@ -521,7 +597,11 @@ async def create_order(input: CreateOrder, id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/verify_order/{input}", tags=["patients"])
-async def verify_order(input: str, db: Session = Depends(get_db)):
+async def verify_order(
+    input: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     try:
         client = get_razorpay_client()
         if not client:

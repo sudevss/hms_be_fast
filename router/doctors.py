@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 import model
 from database import engine, SessionLocal
+from auth_middleware import get_current_user, CurrentUser
 
 # Create all tables
 model.Base.metadata.create_all(bind=engine)
@@ -264,6 +265,7 @@ def group_schedules_by_time(schedules):
 async def get_all_doctors(
     facility_id: Optional[int] = None, 
     include_inactive: Optional[bool] = False,
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -318,7 +320,11 @@ async def get_all_doctors(
 
 
 @router.get("/{doctor_id}", tags=["doctors"], response_model=doctor_schema_with_schedule)
-async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
+async def get_doctor_by_id(
+    doctor_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Get doctor by ID (only if not soft deleted)"""
     try:
         doctor = (
@@ -380,7 +386,11 @@ async def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", tags=["doctors"])
-async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db)):
+async def add_new_doctor(
+    doctor: ui_Doctors,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     try:
         if doctor.facility_id:
             facility = db.query(model.Facility).filter(model.Facility.facility_id == doctor.facility_id).first()
@@ -414,7 +424,12 @@ async def add_new_doctor(doctor: ui_Doctors, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error adding doctor: {str(e)}")
 
 @router.api_route("/{doctor_id}", methods=["PUT"], tags=["doctors"], response_model=doctor_response)
-async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Session = Depends(get_db)):
+async def edit_doctor_details(
+    doctor_id: int,
+    doctor: ui_DoctorsUpdate,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     try:
         existing_doctor = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
@@ -499,7 +514,11 @@ async def edit_doctor_details(doctor_id: int, doctor: ui_DoctorsUpdate, db: Sess
         raise HTTPException(status_code=500, detail=f"Error updating doctor: {str(e)}")
 
 @router.delete("/{doctor_id}", tags=["doctors"])
-async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db)):
+async def delete_doctor_details(
+    doctor_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Soft delete doctor by setting is_deleted=True"""
     try:
         req_doc = db.query(model.Doctors).filter(
@@ -524,7 +543,11 @@ async def delete_doctor_details(doctor_id: int, db: Session = Depends(get_db)):
 
 # Additional endpoint to restore soft deleted doctor
 @router.patch("/{doctor_id}/restore", tags=["doctors"])
-async def restore_doctor(doctor_id: int, db: Session = Depends(get_db)):
+async def restore_doctor(
+    doctor_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Restore a soft deleted doctor"""
     try:
         doctor = db.query(model.Doctors).filter(

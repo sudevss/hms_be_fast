@@ -8,6 +8,7 @@ from sqlalchemy import and_
 # Import your existing database setup and models (same as doctor.py)
 import model
 from database import engine, SessionLocal
+from auth_middleware import get_current_user, CurrentUser, require_roles
 
 # Create all tables
 model.Base.metadata.create_all(bind=engine)
@@ -41,6 +42,7 @@ class PatientDiagnosisCreate(BaseModel):
     vital_temp: Optional[str] = Field(None, max_length=50, description="Temperature")
     vital_spo2: Optional[str] = Field(None, max_length=50, description="Blood oxygen saturation")
     weight: Optional[str] = Field(None, max_length=50, description="Patient weight")
+    height: Optional[str] = Field(None, max_length=50, description="Patient height")
     chief_complaint: Optional[str] = Field(None, description="Patient's chief complaint")
     assessment_notes: Optional[str] = Field(None, description="Doctor's assessment notes")
     treatment_plan: Optional[str] = Field(None, description="Prescribed treatment plan")
@@ -64,6 +66,7 @@ class PatientDiagnosisCreate(BaseModel):
                 "vital_temp": "98.6",
                 "vital_spo2": "99",
                 "weight": "70.5",
+                "height": "175",
                 "chief_complaint": "Chest pain and shortness of breath",
                 "assessment_notes": "Patient presents with mild chest discomfort, likely muscular strain",
                 "treatment_plan": "Rest, pain medication as needed, follow-up in 1 week",
@@ -87,6 +90,7 @@ def diagnosis_to_dict(diagnosis) -> Dict[str, Any]:
         "vital_temp": diagnosis.VITAL_TEMP,
         "vital_spo2": diagnosis.VITAL_SPO2,
         "weight": diagnosis.weight,
+        "height": diagnosis.height,
         "chief_complaint": diagnosis.CHIEF_COMPLAINT,
         "assessment_notes": diagnosis.ASSESSMENT_NOTES,
         "treatment_plan": diagnosis.TREATMENT_PLAN,
@@ -105,6 +109,7 @@ def successful_response(status_code: int, message: str = "Operation successful")
 @router.put("/", tags=["patient-diagnosis"])
 async def create_or_update_patient_diagnosis(
     diagnosis_data: PatientDiagnosisCreate,
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -122,6 +127,10 @@ async def create_or_update_patient_diagnosis(
     Returns: JSON object with success message and created/updated record
     """
     try:
+        # Verify user belongs to the same facility
+        if diagnosis_data.facility_id != current_user.facility_id:
+            raise HTTPException(status_code=403, detail="You can only access data from your facility")
+        
         # Validate that the facility exists
         if diagnosis_data.facility_id:
             facility = db.query(model.Facility).filter(
@@ -175,6 +184,7 @@ async def create_or_update_patient_diagnosis(
             existing_diagnosis.VITAL_TEMP = diagnosis_data.vital_temp
             existing_diagnosis.VITAL_SPO2 = diagnosis_data.vital_spo2
             existing_diagnosis.weight = diagnosis_data.weight
+            existing_diagnosis.height = diagnosis_data.height
             existing_diagnosis.CHIEF_COMPLAINT = diagnosis_data.chief_complaint
             existing_diagnosis.ASSESSMENT_NOTES = diagnosis_data.assessment_notes
             existing_diagnosis.TREATMENT_PLAN = diagnosis_data.treatment_plan
@@ -202,6 +212,7 @@ async def create_or_update_patient_diagnosis(
                 "VITAL_TEMP": diagnosis_data.vital_temp,
                 "VITAL_SPO2": diagnosis_data.vital_spo2,
                 "weight": diagnosis_data.weight,
+                "height": diagnosis_data.height,
                 "CHIEF_COMPLAINT": diagnosis_data.chief_complaint,
                 "ASSESSMENT_NOTES": diagnosis_data.assessment_notes,
                 "TREATMENT_PLAN": diagnosis_data.treatment_plan,
@@ -233,6 +244,7 @@ async def get_patient_diagnosis(
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     doctor_id: Optional[int] = Query(None, description="Doctor ID (optional)"),
     diagnosis_date: Optional[date] = Query(None, description="Diagnosis date (optional)"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
@@ -249,6 +261,10 @@ async def get_patient_diagnosis(
     Returns: JSON array of diagnosis records
     """
     try:
+        # Verify user belongs to the same facility
+        if facility_id != current_user.facility_id:
+            raise HTTPException(status_code=403, detail="You can only access data from your facility")
+        
         # Start with mandatory filters
         query = db.query(model.PatientDiagnosis).filter(
             and_(

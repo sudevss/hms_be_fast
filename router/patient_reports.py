@@ -12,6 +12,7 @@ import logging
 # Import your existing database setup and models (same as doctor.py)
 import model
 from database import engine, SessionLocal
+from auth_middleware import get_current_user, require_admin_role, CurrentUser
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -126,10 +127,12 @@ async def upload_patient_report(
     appointment_id: Optional[int] = Form(None, description="Associated appointment ID (optional)"),
     diagnosis_id: Optional[int] = Form(None, description="Associated diagnosis ID (optional)"),
     files: List[UploadFile] = File(..., description="Binary files to upload (mandatory)"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """
     Upload a patient report file with enhanced error handling and validation.
+    Requires authentication.
     
     All required fields must be provided:
     - facility_id: ID of the facility (required)
@@ -144,6 +147,13 @@ async def upload_patient_report(
     Returns: JSON object with success message and created record
     """
     try:
+        # Verify user belongs to the same facility
+        if current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="You can only upload reports for your assigned facility"
+            )
+        
         # Check disk space first
         free_space_mb = check_disk_space()
         if free_space_mb and free_space_mb < 100:  # Less than 100MB free
@@ -262,7 +272,7 @@ async def upload_patient_report(
         # Commit all files at once with better error handling
         try:
             db.commit()
-            logger.info(f"Successfully uploaded {len(uploaded_reports)} files for patient {patient_id}")
+            logger.info(f"User {current_user.username} successfully uploaded {len(uploaded_reports)} files for patient {patient_id}")
         except Exception as e:
             db.rollback()
             error_msg = str(e).lower()
@@ -306,10 +316,12 @@ async def get_patient_report_file(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     upload_id: int = Query(..., description="Upload ID (mandatory)"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Download a specific patient report file.
+    Requires authentication.
     
     Mandatory parameters:
     - facility_id: Filter by facility ID
@@ -319,6 +331,13 @@ async def get_patient_report_file(
     Returns: Binary file content for download
     """
     try:
+        # Verify user belongs to the same facility
+        if current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="You can only access reports from your assigned facility"
+            )
+        
         # Query for the specific report with all required parameters
         report = db.query(model.PatientReports).filter(
             and_(
@@ -369,10 +388,12 @@ async def get_patient_reports(
     facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     appointment_id: Optional[int] = Query(None, description="Appointment ID (optional)"),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
     Get patient reports with filtering.
+    Requires authentication.
     
     Mandatory parameters:
     - facility_id: Filter by facility ID
@@ -384,6 +405,13 @@ async def get_patient_reports(
     Returns: JSON array of report records (excluding file binary data)
     """
     try:
+        # Verify user belongs to the same facility
+        if current_user.facility_id != facility_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="You can only view reports from your assigned facility"
+            )
+        
         # Query with mandatory filters
         query = db.query(model.PatientReports).filter(
             and_(
