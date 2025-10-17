@@ -97,7 +97,7 @@ def create_admin_token(admin_username: str, facility_id: int, expires_delta: Opt
         "sub": admin_username,
         "username": admin_username,
         "facility_id": facility_id,
-        "type": "super_admin"
+        "role": "super_admin"
     }
     
     if expires_delta:
@@ -184,7 +184,7 @@ def admin_login(
             "username": admin.username,
             "facility_id": admin.facility_id,
             "facility_name": facility.FacilityName if facility else None,
-            "type": "super_admin"
+            "role": "super_admin"
         },
         message=f"Welcome Super Admin {admin.username}!"
     )

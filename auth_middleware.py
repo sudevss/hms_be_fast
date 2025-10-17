@@ -122,8 +122,8 @@ def verify_jwt_token(token: str, db: Session):
             )
         
         # Check if it's an ADMIN token (from admin.py login)
-        token_type = payload.get("type")
-        if token_type == "super_admin":
+        token_role = payload.get("role")
+        if token_role == "super_admin":
             username = payload.get("sub") or payload.get("username")
             facility_id = payload.get("facility_id", 0)
             
