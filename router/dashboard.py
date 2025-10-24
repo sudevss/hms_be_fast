@@ -93,6 +93,9 @@ class DoctorInfo(BaseModel):
 
 class TokenData(BaseModel):
     appointment_id: int
+    facility_id: int
+    patient_id: int
+    doctor_id: int
     token: str
     patient_name: str
     age: int
@@ -886,6 +889,9 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
         
         token_data.append(TokenData(
             appointment_id=appointment.appointment_id,
+            facility_id=appointment.facility_id,
+            patient_id=appointment.patient_id,
+            doctor_id=appointment.doctor_id,
             token=token,
             patient_name=patient_name,
             age=age,
