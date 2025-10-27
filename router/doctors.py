@@ -118,6 +118,7 @@ class doctor_response(BaseModel):
     specialization: str
     consultation_fee: Optional[Decimal] = None
     ABDM_NHPR_id: Optional[str] = None
+    facility_id: Optional[int] = None
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
@@ -317,6 +318,7 @@ async def get_all_doctors(
                 age=getattr(doctor, 'age', None),
                 experience=getattr(doctor, 'experience', None),
                 is_active=doctor.is_active,
+                facility_id=doctor.facility_id,
                 schedules=schedules
             ))
         return result
@@ -325,7 +327,6 @@ async def get_all_doctors(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving doctors: {str(e)}")
-
 
 @router.get("/{doctor_id}", tags=["doctors"], response_model=doctor_schema_with_schedule)
 async def get_doctor_by_id(
