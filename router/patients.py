@@ -93,8 +93,8 @@ class ui_patient(BaseModel):
     gender: str
     ABDM_ABHA_id: Optional[str] = None
     email_id: str
-    disease: str
-    room_id: int
+    disease: Optional[str] = None  
+    room_id: Optional[int] = None
     facility_id: int
    
 
