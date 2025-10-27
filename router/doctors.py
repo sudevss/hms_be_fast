@@ -448,7 +448,7 @@ async def add_new_doctor(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error adding doctor: {str(e)}")
-
+    
 @router.api_route("/{doctor_id}", methods=["PUT"], tags=["doctors"], response_model=doctor_response)
 async def edit_doctor_details(
     doctor_id: int,
@@ -498,7 +498,7 @@ async def edit_doctor_details(
         if not filtered_data:
             raise HTTPException(status_code=400, detail="No valid fields provided for update")
 
-        # Validate facility_id only if it's provided and truthy
+        # Validate facility_id only if it's provided in request body
         if "facility_id" in filtered_data:
             facility_id_update = filtered_data.get("facility_id")
             if facility_id_update:
@@ -507,6 +507,12 @@ async def edit_doctor_details(
                 ).first()
                 if not facility:
                     raise HTTPException(status_code=400, detail="Facility not found")
+                # Verify user has access to the new facility as well
+                if not current_user.is_super_admin() and current_user.facility_id != facility_id_update:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Access denied. You can only assign doctors to your facility."
+                    )
             else:
                 # If facility_id is None or falsy (0), remove it to avoid overwriting
                 filtered_data.pop("facility_id")
@@ -540,6 +546,7 @@ async def edit_doctor_details(
             age=getattr(existing_doctor, 'age', None),
             experience=getattr(existing_doctor, 'experience', None),
             is_active=existing_doctor.is_active,
+            facility_id=existing_doctor.facility_id,
             schedules=schedules
         )
 
