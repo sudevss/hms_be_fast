@@ -774,7 +774,6 @@ def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facilit
         ))
     
     return doctors_info
-
 def get_token_data_optimized(appointments: List[model.Appointment], doctors: List[model.Doctors]) -> List[TokenData]:
     """Token data retrieval function"""
     
@@ -791,35 +790,23 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
         # Get patient info safely
         patient_name = "Unknown"
         age = 0
-        is_paid = False
         
         if appointment.patient:
             patient_name = f"{appointment.patient.firstname} {appointment.patient.lastname}".strip()
             age = getattr(appointment.patient, 'age', 0) or 0
         
         # Get is_paid from appointment table
-        is_paid_value = getattr(appointment, 'is_paid', None)
-        
-        # Handle different formats of payment status
-        if isinstance(is_paid_value, bool):
-            is_paid = is_paid_value
-        elif isinstance(is_paid_value, str):
-            is_paid = is_paid_value.lower() in ['paid', 'yes', 'y', '1', 'true']
-        elif isinstance(is_paid_value, int):
-            is_paid = bool(is_paid_value)
-        else:
-            is_paid = False
+        is_paid = appointment.payment_status
         
         # Format check-in time
         checkin_time = None
         if appointment.CheckinTime:
             checkin_time = appointment.CheckinTime.strftime("%I:%M %p")
         
-        # Payment type
+        # Get payment method from appointment table
         payment_type = "Cash"
         
-        # Get payment method from appointment table
-        payment_method = getattr(appointment, 'payment_method', None)
+        payment_method = appointment.payment_method
         
         if payment_method:
             payment_method_lower = str(payment_method).lower().strip()
