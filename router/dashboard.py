@@ -796,20 +796,19 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
         if appointment.patient:
             patient_name = f"{appointment.patient.firstname} {appointment.patient.lastname}".strip()
             age = getattr(appointment.patient, 'age', 0) or 0
-            
-            # Get is_paid from patient table
-            is_paid_value = getattr(appointment.patient, 'is_paid', None) or \
-                           getattr(appointment.patient, 'payment_status', None)
-            
-            # Handle different formats of payment status
-            if isinstance(is_paid_value, bool):
-                is_paid = is_paid_value
-            elif isinstance(is_paid_value, str):
-                is_paid = is_paid_value.lower() in ['paid', 'yes', 'y', '1', 'true']
-            elif isinstance(is_paid_value, int):
-                is_paid = bool(is_paid_value)
-            else:
-                is_paid = False
+        
+        # Get is_paid from appointment table
+        is_paid_value = getattr(appointment, 'is_paid', None)
+        
+        # Handle different formats of payment status
+        if isinstance(is_paid_value, bool):
+            is_paid = is_paid_value
+        elif isinstance(is_paid_value, str):
+            is_paid = is_paid_value.lower() in ['paid', 'yes', 'y', '1', 'true']
+        elif isinstance(is_paid_value, int):
+            is_paid = bool(is_paid_value)
+        else:
+            is_paid = False
         
         # Format check-in time
         checkin_time = None
@@ -819,16 +818,8 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
         # Payment type
         payment_type = "Cash"
         
-        # Check appointment table for payment method
-        appointment_payment = getattr(appointment, 'payment_method', None)
-        
-        # Check patient table for payment method
-        patient_payment = None
-        if appointment.patient:
-            patient_payment = getattr(appointment.patient, 'payment_method', None)
-        
-        # Use appointment payment method first, then patient payment method
-        payment_method = appointment_payment or patient_payment
+        # Get payment method from appointment table
+        payment_method = getattr(appointment, 'payment_method', None)
         
         if payment_method:
             payment_method_lower = str(payment_method).lower().strip()
