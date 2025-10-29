@@ -105,6 +105,7 @@ class TokenData(BaseModel):
     payment_type: Optional[str]  # "Cash", "UPI", "Debit Card/Credit Card", "Net Banking"
     is_paid: bool
     status: str  # "Scheduled", "Completed", "Cancelled"
+    diagnosis_id: Optional[int] = None 
 
 class DoctorDashboardResponse(BaseModel):
     facility_id: int
@@ -865,6 +866,11 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
         else:
             logger.info(f"Appointment {appointment.appointment_id} not checked in, token set to empty string")
         
+        # Get diagnosis_id if exists
+        diagnosis_id = None
+        if hasattr(appointment, 'diagnosis') and appointment.diagnosis:
+            diagnosis_id = getattr(appointment.diagnosis, 'diagnosis_id', None)
+        
         token_data.append(TokenData(
             appointment_id=appointment.appointment_id,
             facility_id=appointment.facility_id,
@@ -878,7 +884,8 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
             checkin_time=checkin_time,
             payment_type=payment_type,
             is_paid=is_paid,
-            status=status
+            status=status,
+            diagnosis_id=diagnosis_id
         ))
     
     return token_data
