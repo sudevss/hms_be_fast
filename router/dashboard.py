@@ -394,8 +394,14 @@ async def get_doctor_details_for_dashboard(
         # Get ALL doctors in the facility for display
         all_doctors = db.query(model.Doctors).filter(model.Doctors.facility_id == facility_id).all()
         
-        # Build filtered appointments query based on doctor filter
-        appointments_query = db.query(model.Appointment).filter(
+        # Build filtered appointments query based on doctor filter - NOW INCLUDING DIAGNOSIS_ID
+        appointments_query = db.query(
+            model.Appointment,
+            model.PatientDiagnosis.diagnosis_id.label('diagnosis_id')
+        ).outerjoin(
+            model.PatientDiagnosis, 
+            model.Appointment.appointment_id == model.PatientDiagnosis.appointment_id
+        ).filter(
             and_(
                 model.Appointment.facility_id == facility_id,
                 model.Appointment.AppointmentDate == date
@@ -436,8 +442,19 @@ async def get_doctor_details_for_dashboard(
             # No filters applied - show all doctors' appointments
             logger.info("No doctor filters applied, showing all appointments")
 
-        appointments = appointments_query.options(joinedload(model.Appointment.patient)).all()
-        logger.info(f"Found {len(appointments)} appointments for the query")
+        results = appointments_query.options(joinedload(model.Appointment.patient)).all()
+        logger.info(f"Found {len(results)} appointments for the query")
+        
+        # Extract appointments and diagnosis_ids
+        appointments = []
+        appointment_diagnosis_map = {}
+        
+        for result in results:
+            appointment = result[0]  # First element is the Appointment object
+            diagnosis_id = result[1] if len(result) > 1 else None  # Second element is diagnosis_id
+            
+            appointments.append(appointment)
+            appointment_diagnosis_map[appointment.appointment_id] = diagnosis_id
 
         # Get hourly booking data (only for filtered appointments)
         hourly_data = get_hourly_booking_data_optimized(appointments)
@@ -460,8 +477,8 @@ async def get_doctor_details_for_dashboard(
                                    app.AppointmentStatus == 'Waiting' and 
                                    not app.Cancelled]
         
-        # Get token data (only for current date checked-in appointments)
-        token_data = get_token_data_optimized(current_date_waiting_appointments, all_doctors)
+        # Get token data (only for current date checked-in appointments) with diagnosis_ids
+        token_data = get_token_data_optimized(current_date_waiting_appointments, all_doctors, appointment_diagnosis_map)
 
         logger.info(f"Doctor dashboard query completed in {time_module.time() - start_time:.2f}s")
 
@@ -775,8 +792,9 @@ def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facilit
         ))
     
     return doctors_info
-def get_token_data_optimized(appointments: List[model.Appointment], doctors: List[model.Doctors]) -> List[TokenData]:
-    """Token data retrieval function"""
+
+def get_token_data_optimized(appointments: List[model.Appointment], doctors: List[model.Doctors], appointment_diagnosis_map: Dict[int, Optional[int]]) -> List[TokenData]:
+    """Token data retrieval function with diagnosis_id"""
     
     # Create doctor lookup dictionary
     doctor_lookup = {doctor.id: doctor for doctor in doctors}
@@ -866,10 +884,8 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
         else:
             logger.info(f"Appointment {appointment.appointment_id} not checked in, token set to empty string")
         
-        # Get diagnosis_id if exists
-        diagnosis_id = None
-        if hasattr(appointment, 'diagnosis') and appointment.diagnosis:
-            diagnosis_id = getattr(appointment.diagnosis, 'diagnosis_id', None)
+        # Get diagnosis_id from the map
+        diagnosis_id = appointment_diagnosis_map.get(appointment.appointment_id)
         
         token_data.append(TokenData(
             appointment_id=appointment.appointment_id,
