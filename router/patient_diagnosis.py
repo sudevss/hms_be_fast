@@ -48,7 +48,7 @@ class PatientDiagnosisCreate(BaseModel):
     assessment_notes: Optional[str] = Field(None, description="Doctor's assessment notes")
     treatment_plan: Optional[str] = Field(None, description="Prescribed treatment plan")
     recomm_tests: Optional[str] = Field(None, description="Recommended tests")
-    followup_date: Optional[date] = Field(None, description="Follow-up appointment date")
+    followup_date: Optional[date] = Field(None, description="Follow-up appointment date (optional)")
 
     @field_validator('appointment_id', 'diagnosis_id')
     @classmethod
@@ -80,7 +80,7 @@ class PatientDiagnosisCreate(BaseModel):
                 "assessment_notes": "Patient presents with mild chest discomfort, likely muscular strain",
                 "treatment_plan": "Rest, pain medication as needed, follow-up in 1 week",
                 "recomm_tests": "ECG, Complete Blood Count, Chest X-ray",
-                "followup_date": "2025-09-22"
+                "followup_date": None
             }
         }
 
