@@ -693,23 +693,31 @@ async def get_schedules(
         weekdays_list = []
         
         for weekday in weekdays:
+            # Get schedules for this weekday
             weekday_schedules = [s for s in schedules if s.week_day == weekday]
             
-            if weekday_schedules:
-                # Doctor has schedules for this weekday - show actual slots
-                slot_weeks = []
-                for schedule in weekday_schedules:
+            # Always create exactly 3 slots (windows 1, 2, 3)
+            slot_weeks = []
+            for window_num in range(1, 4):
+                # Find schedule matching this window number
+                matching_schedule = next(
+                    (s for s in weekday_schedules if s.window_num == window_num),
+                    None
+                )
+                
+                if matching_schedule:
                     slot_weeks.append({
-                        "startTime": time_to_string(schedule.slot_start_time),
-                        "endTime": time_to_string(schedule.slot_end_time),
-                        "totalSlots": schedule.total_slots if schedule.total_slots is not None else "",
-                        "windowNum": str(schedule.window_num)
+                        "startTime": time_to_string(matching_schedule.slot_start_time),
+                        "endTime": time_to_string(matching_schedule.slot_end_time),
+                        "totalSlots": matching_schedule.total_slots if matching_schedule.total_slots is not None else ""
                     })
-            else:
-                # Doctor has no schedules for this weekday - show one empty slot
-                slot_weeks = [
-                    {"startTime": "", "endTime": "", "totalSlots": "", "windowNum": ""}
-                ]
+                else:
+                    # Empty slot for this window
+                    slot_weeks.append({
+                        "startTime": "",
+                        "endTime": "",
+                        "totalSlots": ""
+                    })
             
             weekdays_list.append({
                 "weekDay": weekday,
@@ -734,7 +742,6 @@ async def get_schedules(
     except Exception as e:
         logger.error(f"Error getting schedules: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting schedules: {str(e)}")
-
 @router.delete("/{facility_id}/{doctor_id}/{start_date}/{end_date}/{window_num}", response_model=Dict)
 async def delete_schedule(
     facility_id: int, 
