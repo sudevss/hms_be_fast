@@ -1,3 +1,4 @@
+
 from sqlalchemy.orm import relationship
 from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean, Numeric, func, CheckConstraint, Index, UniqueConstraint, Text
 from database import Base
@@ -138,7 +139,7 @@ class DoctorBookedSlots(Base):
     facility = relationship("Facility", back_populates="booked_slots")
     appointments = relationship("Appointment", back_populates="booked_slot")
 
-    __table_args__ = (
+    _table_args_ = (
         CheckConstraint("Start_Time < End_Time", name="check_time_order"),
         CheckConstraint("Booked_status IN ('Booked','Not Booked')", name="check_booked_status"),
         Index("idx_doctor_facility_date", "Doctor_id", "Facility_id", "Slot_date"),
@@ -159,6 +160,7 @@ class Appointment(Base):
 
     payment_method = Column(String(50), default="Cash")
     payment_status = Column(Boolean, nullable=False, default=False)
+    payment_comments = Column(Text)
     AppointmentDate = Column(Date, nullable=False, index=True)
     AppointmentTime = Column(Time, nullable=False)
     Reason = Column(String(200), nullable=False)
@@ -174,7 +176,7 @@ class Appointment(Base):
     facility = relationship("Facility", back_populates="appointments")
     booked_slot = relationship("DoctorBookedSlots", back_populates="appointments")
 
-    __table_args__ = (
+    _table_args_ = (
         CheckConstraint("AppointmentMode IN ('a','A','w','W')", name="check_appointment_mode"),
         CheckConstraint("AppointmentStatus IN ('Scheduled','Waiting','Completed','Cancelled')",
                         name="check_appointment_status"),
@@ -265,7 +267,7 @@ class PatientDiagnosis(Base):
     appointment = relationship("Appointment")
     doctor = relationship("Doctors")
 
-    __table_args__ = (
+    _table_args_ = (
         Index("idx_patient_diagnosis_date", "patient_id", "DATE"),
         Index("idx_facility_patient", "facility_id", "patient_id"),
     )
@@ -288,7 +290,7 @@ class PatientReports(Base):
     appointment = relationship("Appointment")
     diagnosis = relationship("PatientDiagnosis")
 
-    __table_args__ = (
+    _table_args_ = (
         Index("idx_patient_reports_facility", "facility_id"),
         Index("idx_patient_reports_patient", "patient_id"),
         Index("idx_patient_reports_date", "DATE"),

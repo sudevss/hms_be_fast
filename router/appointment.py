@@ -133,6 +133,7 @@ class CancelRequest(BaseModel):
 class PaymentRequest(BaseModel):
     payment_status: bool = False
     payment_method: Optional[str] = None
+    payment_comments: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -163,6 +164,7 @@ class AppointmentResponse(BaseModel):
     paid: Optional[bool] = None
     consultation_fee: Optional[float] = None
     payment_method: Optional[str] = None
+    payment_comments: Optional[str] = None
     diagnosis_id: Optional[int] = None
 
     class Config:
@@ -194,6 +196,7 @@ class PaymentResponse(BaseModel):
     appointment_id: int
     payment_status: bool
     payment_method: Optional[str]
+    payment_comments: Optional[str]
     appointment_status: str
     message: str
 
@@ -465,6 +468,7 @@ def get_all_appointments(
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
             "payment_method": appointment.payment_method,
+            "payment_comments": appointment.payment_comments,
             "diagnosis_id": diagnosis_id
         }
         formatted_results.append(AppointmentResponse(**appointment_dict))
@@ -536,6 +540,7 @@ def get_appointment(
         "paid": True if appointment.payment_status == 1 else False,
         "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
         "payment_method": appointment.payment_method,
+        "payment_comments": appointment.payment_comments,
         "diagnosis_id": diagnosis_id
     }
     
@@ -650,6 +655,7 @@ def create_appointment(
             "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
+            "payment_comments": appointment.payment_comments,
             "diagnosis_id": diagnosis_id
         }
         
@@ -802,7 +808,6 @@ def cancel_appointment(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error cancelling appointment: {str(e)}")
 
-
 @router.post("/{appointment_id}/payment", response_model=PaymentResponse)
 def update_payment_status(
     appointment_id: int,
@@ -840,6 +845,10 @@ def update_payment_status(
 
         if payment_request.payment_method:
             appt.payment_method = payment_request.payment_method
+        
+        # Add payment comments - handle both adding and clearing
+        if payment_request.payment_comments is not None:
+            appt.payment_comments = payment_request.payment_comments
 
         appt.payment_status = payment_request.payment_status
         
@@ -855,6 +864,7 @@ def update_payment_status(
             appointment_id=appt.appointment_id,
             payment_status=payment_request.payment_status,
             payment_method=payment_request.payment_method,
+            payment_comments=appt.payment_comments,  # Return the saved comment
             appointment_status=appt.AppointmentStatus,
             message=message
         )
@@ -1078,6 +1088,7 @@ def update_appointment(
             "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
+            "payment_comments": appointment.payment_comments,
             "diagnosis_id": diagnosis_id
         }
         
@@ -1372,6 +1383,7 @@ def get_patient_appointments(
             "paid": True if appointment.payment_status == 1 else False,
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
             "payment_method": appointment.payment_method,
+            "payment_comments": appointment.payment_comments,
             "diagnosis_id": diagnosis_id
         }
         formatted_results.append(AppointmentResponse(**appointment_dict))

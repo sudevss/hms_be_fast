@@ -208,6 +208,70 @@ def split_ranges_around_leave(start_date: date, end_date: date,
     return segments
 
 
+def delete_schedules_in_leave_period(db: Session, facility_id: int, doctor_id: int,
+                                     leave_start: date, leave_end: date) -> None:
+    """
+    Delete or adjust all existing schedules that overlap with the leave period.
+    This ensures no schedules exist during the leave dates.
+    """
+    schedules_in_leave = db.query(model.DoctorSchedule).filter(
+        model.DoctorSchedule.facility_id == facility_id,
+        model.DoctorSchedule.doctor_id == doctor_id,
+        model.DoctorSchedule.start_date <= leave_end,
+        model.DoctorSchedule.end_date >= leave_start
+    ).all()
+    
+    for existing_schedule in schedules_in_leave:
+        existing_start = existing_schedule.start_date
+        existing_end = existing_schedule.end_date
+        
+        # Case 1: Schedule completely within leave period - delete it
+        if (existing_start >= leave_start and existing_end <= leave_end):
+            logger.info(f"Deleting schedule completely within leave: {existing_start} to {existing_end}")
+            db.delete(existing_schedule)
+        
+        # Case 2: Schedule starts before leave, ends during/after leave
+        elif (existing_start < leave_start and existing_end >= leave_start):
+            new_end = leave_start - timedelta(days=1)
+            if new_end >= existing_start:
+                logger.info(f"Truncating schedule end date to {new_end} (before leave)")
+                existing_schedule.end_date = new_end
+            else:
+                logger.info(f"Deleting schedule that would become invalid after truncation")
+                db.delete(existing_schedule)
+        
+        # Case 3: Schedule starts during leave, ends after leave
+        elif (existing_start <= leave_end and existing_end > leave_end):
+            new_start = leave_end + timedelta(days=1)
+            if new_start <= existing_end:
+                logger.info(f"Moving schedule start date to {new_start} (after leave)")
+                existing_schedule.start_date = new_start
+            else:
+                logger.info(f"Deleting schedule that would become invalid after adjustment")
+                db.delete(existing_schedule)
+        
+        # Case 4: Leave period is in the middle of the schedule
+        elif (existing_start < leave_start and existing_end > leave_end):
+            logger.info(f"Splitting schedule around leave period")
+            
+            # Keep the first part (before leave)
+            existing_schedule.end_date = leave_start - timedelta(days=1)
+            
+            # Create second part (after leave)
+            continuation_schedule = model.DoctorSchedule(
+                facility_id=existing_schedule.facility_id,
+                doctor_id=existing_schedule.doctor_id,
+                start_date=leave_end + timedelta(days=1),
+                end_date=existing_end,
+                week_day=existing_schedule.week_day,
+                window_num=existing_schedule.window_num,
+                slot_start_time=existing_schedule.slot_start_time,
+                slot_end_time=existing_schedule.slot_end_time,
+                total_slots=existing_schedule.total_slots
+            )
+            db.add(continuation_schedule)
+
+
 # ---------------- Pydantic Models ----------------
 
 class SlotWeek(BaseModel):
@@ -272,8 +336,8 @@ class ScheduleCreate(BaseModel):
                 "endDate": "2025-12-31", 
                 "facility_id": 1,
                 "doctor_id": 1,
-                "leaveStartDate": "",
-                "leaveEndDate": "",
+                "leaveStartDate": "0000-00-00",
+                "leaveEndDate": "0000-00-00",
                 "weekDaysList": [
                     {
                         "weekDay": "Monday",
@@ -377,8 +441,8 @@ async def create_schedule(
                     "endDate": "2025-12-31",
                     "facility_id": 1,
                     "doctor_id": 1,
-                    "leaveStartDate": "",
-                    "leaveEndDate": "",
+                    "leaveStartDate": "0000-00-00",
+                    "leaveEndDate": "0000-00-00",
                     "weekDaysList": [
                         {
                             "weekDay": "Monday",
@@ -446,8 +510,16 @@ async def create_schedule(
 ):
     """Create new schedules with overlap handling and honor leave ranges."""
     try:
-        # Note: Validation is now handled by Pydantic automatically
-        # since we made the fields required in the model
+        # Delete or adjust all existing schedules that fall within the leave period
+        if schedule.leaveStartDate and schedule.leaveEndDate:
+            delete_schedules_in_leave_period(
+                db,
+                schedule.facility_id,
+                schedule.doctor_id,
+                schedule.leaveStartDate,
+                schedule.leaveEndDate
+            )
+            db.flush()
         
         created_schedules: List[Dict[str, Any]] = []
 
@@ -573,7 +645,6 @@ async def create_schedule(
         db.rollback()
         logger.error(f"Error creating schedule: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating schedule: {str(e)}")
-
 @router.get("/{facility_id}/{doctor_id}", response_model=Dict)
 async def get_schedules(
     facility_id: int, 
@@ -598,6 +669,24 @@ async def get_schedules(
         # Find the overall date range
         overall_start = min(s.start_date for s in schedules)
         overall_end = max(s.end_date for s in schedules)
+
+        # Detect leave period by finding gaps in date ranges
+        leave_start_date = ""
+        leave_end_date = ""
+        
+        # Get all unique date ranges, sorted
+        date_ranges = sorted(set((s.start_date, s.end_date) for s in schedules))
+        
+        # Check for gaps between consecutive date ranges
+        for i in range(len(date_ranges) - 1):
+            current_end = date_ranges[i][1]
+            next_start = date_ranges[i + 1][0]
+            
+            # If there's a gap of more than 1 day, it's likely a leave period
+            if (next_start - current_end).days > 1:
+                leave_start_date = str(current_end + timedelta(days=1))
+                leave_end_date = str(next_start - timedelta(days=1))
+                break  # Assuming only one leave period
 
         # Initialize weekdays structure
         weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -633,8 +722,8 @@ async def get_schedules(
             "endDate": str(overall_end),
             "facility_id": facility_id,
             "doctor_id": doctor_id,
-            "leaveStartDate": "",  # Leave dates not stored in current schema
-            "leaveEndDate": "",    # Leave dates not stored in current schema
+            "leaveStartDate": leave_start_date,
+            "leaveEndDate": leave_end_date,
             "weekDaysList": weekdays_list
         }
 
