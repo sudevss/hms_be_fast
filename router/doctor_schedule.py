@@ -751,36 +751,34 @@ async def get_schedules(
         logger.error(f"Error getting schedules: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting schedules: {str(e)}")
 
-@router.delete("/{facility_id}/{doctor_id}/{start_date}/{end_date}/{window_num}", response_model=Dict)
+@router.delete("/{facility_id}/{doctor_id}/{week_day}/{window_num}", response_model=Dict)
 async def delete_schedule(
     facility_id: int, 
-    doctor_id: int, 
-    start_date: date, 
-    end_date: date, 
+    doctor_id: int,
+    week_day: str,
     window_num: int, 
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a schedule"""
+    """Delete all schedules for a specific weekday and window"""
     try:
-        if end_date < start_date:
-            raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
-
-        existing_schedule = db.query(model.DoctorSchedule).filter(
+        # Delete all matching schedules (handles multiple date ranges)
+        deleted_count = db.query(model.DoctorSchedule).filter(
             model.DoctorSchedule.facility_id == facility_id,
             model.DoctorSchedule.doctor_id == doctor_id,
-            model.DoctorSchedule.start_date == start_date,
-            model.DoctorSchedule.end_date == end_date,
+            model.DoctorSchedule.week_day == week_day,
             model.DoctorSchedule.window_num == window_num
-        ).first()
+        ).delete(synchronize_session=False)
 
-        if not existing_schedule:
-            raise HTTPException(status_code=404, detail="Schedule not found")
+        if deleted_count == 0:
+            raise HTTPException(status_code=404, detail="No schedules found to delete")
 
-        db.delete(existing_schedule)
         db.commit()
 
-        return {"success": True, "message": "Schedule deleted successfully"}
+        return {
+            "success": True, 
+            "message": f"Successfully deleted {deleted_count} schedule(s) for {week_day} window {window_num}"
+        }
 
     except HTTPException:
         raise
@@ -788,7 +786,6 @@ async def delete_schedule(
         db.rollback()
         logger.error(f"Error deleting schedule: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error deleting schedule: {str(e)}")
-
 
 @router.get("/availability/{facility_id}/{doctor_id}/{start_date}/{end_date}", response_model=AvailabilityResponse)
 async def check_doctor_availability(
