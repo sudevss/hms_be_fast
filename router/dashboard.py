@@ -182,9 +182,10 @@ def get_day_of_week(date_obj: date) -> str:
 def format_time_slot(start_time: time, end_time: time) -> str:
     return f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
 
+
 def calculate_total_facility_slots_optimized(db: Session, facility_id: int, target_date: date) -> int:
     """
-    Calculate total slots using doctor_schedule table with 15-minute slots (4 slots per hour)
+    Calculate total slots using doctor_schedule table with DYNAMIC slot duration per schedule
     """
     start_time = time_module.time()
     
@@ -213,6 +214,9 @@ def calculate_total_facility_slots_optimized(db: Session, facility_id: int, targ
                 start_time_obj = schedule.slot_start_time
                 end_time_obj = schedule.slot_end_time
                 
+                # Get slot duration from schedule (default to 15 if not set)
+                slot_duration = getattr(schedule, 'slot_duration_minutes', 15) or 15
+                
                 # Convert string times to time objects if needed
                 if isinstance(start_time_obj, str):
                     try:
@@ -236,19 +240,19 @@ def calculate_total_facility_slots_optimized(db: Session, facility_id: int, targ
                 
                 duration_minutes = (end_datetime - start_datetime).total_seconds() / 60
                 
-                # Calculate number of 15-minute slots
-                slots_in_this_schedule = int(duration_minutes / 15)
+                # Calculate number of slots using the DYNAMIC slot duration
+                slots_in_this_schedule = int(duration_minutes / slot_duration)
                 
                 total_slots += slots_in_this_schedule
                 
-                logger.info(f"Schedule for Doctor {schedule.doctor_id}: {start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')} = {duration_minutes} minutes = {slots_in_this_schedule} slots")
+                logger.info(f"Schedule for Doctor {schedule.doctor_id}: {start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')} = {duration_minutes} minutes / {slot_duration} min slots = {slots_in_this_schedule} slots")
                 
             except Exception as e:
                 logger.error(f"Error processing schedule {schedule.window_num} for doctor {schedule.doctor_id}: {str(e)}")
                 continue
         
         logger.info(f"Available slots calculation took: {time_module.time() - start_time:.2f}s")
-        logger.info(f"Total facility slots for {target_date}: {total_slots} (based on 15-minute intervals)")
+        logger.info(f"Total facility slots for {target_date}: {total_slots} (based on dynamic slot durations)")
         
         return total_slots
         
@@ -502,7 +506,7 @@ async def get_doctor_details_for_dashboard(
 def calculate_summary_for_filtered_doctors(appointments: List[model.Appointment], doctor_ids: List[int], 
                                          db: Session, facility_id: int, date: date) -> DoctorSummary:
     """
-    Calculate summary using doctor_schedule table with 15-minute slots
+    Calculate summary using doctor_schedule table with DYNAMIC slot duration per schedule
     """
     
     # Count only non-cancelled appointments for totals
@@ -515,7 +519,7 @@ def calculate_summary_for_filtered_doctors(appointments: List[model.Appointment]
                                app.AppointmentMode and 
                                app.AppointmentMode.lower().startswith('w'))
     
-    # Calculate available slots for the filtered doctors using 15-minute slot logic
+    # Calculate available slots for the filtered doctors using DYNAMIC slot duration logic
     available_slots = 0
     
     if doctor_ids:
@@ -541,6 +545,9 @@ def calculate_summary_for_filtered_doctors(appointments: List[model.Appointment]
                     start_time_obj = schedule.slot_start_time
                     end_time_obj = schedule.slot_end_time
                     
+                    # Get slot duration from schedule (default to 15 if not set)
+                    slot_duration = getattr(schedule, 'slot_duration_minutes', 15) or 15
+                    
                     # Convert string times to time objects if needed
                     if isinstance(start_time_obj, str):
                         try:
@@ -564,12 +571,12 @@ def calculate_summary_for_filtered_doctors(appointments: List[model.Appointment]
                     
                     duration_minutes = (end_datetime - start_datetime).total_seconds() / 60
                     
-                    # Calculate number of 15-minute slots
-                    slots_in_this_schedule = int(duration_minutes / 15)
+                    # Calculate number of slots using the DYNAMIC slot duration
+                    slots_in_this_schedule = int(duration_minutes / slot_duration)
                     
                     total_scheduled_slots += slots_in_this_schedule
                     
-                    logger.info(f"Doctor {schedule.doctor_id} schedule: {start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')} = {duration_minutes} minutes = {slots_in_this_schedule} slots")
+                    logger.info(f"Doctor {schedule.doctor_id} schedule: {start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')} = {duration_minutes} minutes / {slot_duration} min slots = {slots_in_this_schedule} slots")
                     
                 except Exception as e:
                     logger.error(f"Error processing schedule for doctor {schedule.doctor_id}: {str(e)}")
@@ -656,7 +663,7 @@ def format_hour_display(hour: int) -> str:
 def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facility_id: int, 
                               db: Session, day_of_week: str) -> List[DoctorInfo]:
     """
-    Get doctor info using new table structure with 15-minute slots
+    Get doctor info using new table structure with DYNAMIC slot duration per schedule
     """
     
     # Get all doctor IDs
@@ -673,7 +680,7 @@ def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facilit
         )
     ).all()
     
-    # Group schedules by doctor_id and calculate total slots per doctor based on 15-minute intervals
+    # Group schedules by doctor_id and calculate total slots per doctor based on DYNAMIC slot duration
     schedule_slots_dict = {}
     for schedule in schedules:
         doctor_id = schedule.doctor_id
@@ -682,6 +689,9 @@ def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facilit
             # Get start and end times
             start_time_obj = schedule.slot_start_time
             end_time_obj = schedule.slot_end_time
+            
+            # Get slot duration from schedule (default to 15 if not set)
+            slot_duration = getattr(schedule, 'slot_duration_minutes', 15) or 15
             
             # Convert string times to time objects if needed
             if isinstance(start_time_obj, str):
@@ -706,14 +716,14 @@ def get_doctors_info_optimized(doctors: List[model.Doctors], date: date, facilit
             
             duration_minutes = (end_datetime - start_datetime).total_seconds() / 60
             
-            # Calculate number of 15-minute slots
-            slots_in_this_schedule = int(duration_minutes / 15)
+            # Calculate number of slots using the DYNAMIC slot duration
+            slots_in_this_schedule = int(duration_minutes / slot_duration)
             
             if doctor_id not in schedule_slots_dict:
                 schedule_slots_dict[doctor_id] = 0
             schedule_slots_dict[doctor_id] += slots_in_this_schedule
             
-            logger.info(f"Doctor {doctor_id} schedule window: {start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')} = {duration_minutes} minutes = {slots_in_this_schedule} slots")
+            logger.info(f"Doctor {doctor_id} schedule window: {start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')} = {duration_minutes} minutes / {slot_duration} min slots = {slots_in_this_schedule} slots")
             
         except Exception as e:
             logger.error(f"Error processing schedule for doctor {doctor_id}: {str(e)}")

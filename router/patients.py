@@ -80,6 +80,7 @@ def get_db():
 
 router = APIRouter(
     prefix="/patients",
+    tags=["patients"],  # Add this line
     responses={404: {"description": "Not found"}}
 )
 

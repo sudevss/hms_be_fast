@@ -119,9 +119,17 @@ class DoctorSchedule(Base):
     slot_start_time = Column(Time, nullable=False)
     slot_end_time = Column(Time, nullable=False)
     total_slots = Column(String(50), nullable=True)
+    slot_duration_minutes = Column(Integer, nullable=False, default=15)
+    availability_flag = Column(String(1), nullable=False, default='A')  # 'A' = Available, 'L' = Leave
+
 
     facility = relationship("Facility", back_populates="doctor_schedules")
     doctor = relationship("Doctors", back_populates="doctor_schedules")
+    __table_args__ = (
+        CheckConstraint("availability_flag IN ('A', 'L')", name="check_availability_flag"),
+        Index("idx_doctor_schedule_availability", "facility_id", "doctor_id", "availability_flag"),
+    )
+
 
 class DoctorBookedSlots(Base):
     __tablename__ = "doctor_booked_slots"

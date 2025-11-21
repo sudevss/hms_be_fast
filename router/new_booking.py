@@ -91,7 +91,8 @@ def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int
         ).all()
         
         if not doctor_schedules:
-            return False, f"Doctor {doctor_id} is not scheduled to work on {day_of_week}s at facility {facility_id} for the date {appointment_date}"
+            # FIX: Return 3 values instead of 2
+            return False, f"Doctor {doctor_id} is not scheduled to work on {day_of_week}s at facility {facility_id} for the date {appointment_date}", None
         
         available_windows = []
         for schedule in doctor_schedules:
@@ -113,17 +114,21 @@ def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int
             available_windows.append(f"Window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
             
             if start_time <= appointment_time < end_time:
-                return True, f"Doctor is available in schedule window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}"
+                # Return the slot duration for this schedule window
+                return True, f"Doctor is available in schedule window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}", schedule.slot_duration_minutes
         
-        return False, f"Doctor {doctor_id} not available at {appointment_time.strftime('%H:%M')} on {day_of_week} at facility {facility_id}. Available windows: {', '.join(available_windows)}"
+        return False, f"Doctor {doctor_id} not available at {appointment_time.strftime('%H:%M')} on {day_of_week} at facility {facility_id}. Available windows: {', '.join(available_windows)}", None
         
     except Exception as e:
-        return False, f"Error checking doctor schedule: {str(e)}"
+        # FIX: Return 3 values instead of 2
+        return False, f"Error checking doctor schedule: {str(e)}", None
 
-def find_or_create_available_slot(db, doctor_id, facility_id, appointment_date, appointment_time):
+def find_or_create_available_slot(db, doctor_id, facility_id, appointment_date, appointment_time, slot_duration_minutes=15):
+    """Updated to use dynamic slot duration"""
     try:
         slot_start_time = appointment_time
-        slot_end_time = (datetime.combine(date.today(), appointment_time) + timedelta(minutes=15)).time()
+        # Use the slot_duration_minutes parameter instead of hardcoded 15
+        slot_end_time = (datetime.combine(date.today(), appointment_time) + timedelta(minutes=slot_duration_minutes)).time()
 
         # Check for exact match first
         existing_slot = db.query(model.DoctorBookedSlots).filter(
@@ -148,7 +153,6 @@ def find_or_create_available_slot(db, doctor_id, facility_id, appointment_date, 
             model.DoctorBookedSlots.Facility_id == facility_id,
             model.DoctorBookedSlots.Slot_date == appointment_date,
             model.DoctorBookedSlots.Booked_status == "Booked",
-            # Check for any overlap: new slot overlaps if it starts before existing ends AND ends after existing starts
             ((model.DoctorBookedSlots.Start_Time < slot_end_time) & (model.DoctorBookedSlots.End_Time > slot_start_time))
         ).all()
 
@@ -156,7 +160,7 @@ def find_or_create_available_slot(db, doctor_id, facility_id, appointment_date, 
             conflicting_times = []
             for slot in overlapping_slots:
                 conflicting_times.append(f"{slot.Start_Time.strftime('%H:%M')}-{slot.End_Time.strftime('%H:%M')}")
-            return None, f"Time slot {slot_start_time.strftime('%H:%M')}-{slot_end_time.strftime('%H:%M')} overlaps with existing booked slots: {', '.join(conflicting_times)}. Please choose a time with at least 15-minute gap."
+            return None, f"Time slot {slot_start_time.strftime('%H:%M')}-{slot_end_time.strftime('%H:%M')} overlaps with existing booked slots: {', '.join(conflicting_times)}. Please choose a time with at least {slot_duration_minutes}-minute gap."
 
         # Create new slot if no conflicts
         new_slot = model.DoctorBookedSlots(
@@ -349,6 +353,7 @@ class AppointmentResponse(BaseModel):
     TokenID: Optional[str] = None
     AppointmentStatus: Optional[str] = None
     payment_method: Optional[str] = None
+    
 
 class DashboardAppointmentResponse(BaseModel):
     appointment: AppointmentResponse
@@ -450,38 +455,14 @@ class QuickAppointmentCreate(BaseModel):
 # -------------------- Endpoints --------------------
 @router.post("/book", response_model=DashboardAppointmentResponse)
 def dashboard_book_appointment(
-    booking_data: DashboardAppointmentCreate = Body(
-        ...,
-        example={
-            "patient_info": {
-                "firstname": "",
-                "lastname": "",
-                "contact_number": "",
-                "age": 0,
-                "dob": "2025-01-01",
-                "address": "",
-                "gender": "",
-                "email_id": "",
-                "disease": "",
-                "ABDM_ABHA_id": ""
-            },
-            "doctor_id": 0,
-            "facility_id": 0,
-            "AppointmentDate": str(date.today()),
-            "AppointmentTime": "",
-            "Reason": "string",
-            "AppointmentMode": "A",
-            "room_id": 0,
-            "payment_status": 0,
-            "payment_method": "Cash"
-        }
-    ),
+    booking_data: DashboardAppointmentCreate = Body(...),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Enhanced Dashboard API: Books appointment with proper validation flow (Requires Authentication)"""
     try:
-        schedule_valid, schedule_message = check_doctor_schedule_enhanced(
+        # Get schedule validation with slot duration
+        schedule_valid, schedule_message, slot_duration = check_doctor_schedule_enhanced(
             db, booking_data.doctor_id, booking_data.facility_id, 
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
@@ -489,13 +470,18 @@ def dashboard_book_appointment(
         if not schedule_valid:
             raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
         
+        # Use the slot duration from the schedule (default to 15 if not found)
+        slot_duration_minutes = slot_duration if slot_duration else 15
+        
         slot_dcid, error_message = find_or_create_available_slot(
             db, booking_data.doctor_id, booking_data.facility_id,
-            booking_data.AppointmentDate, booking_data.AppointmentTime
+            booking_data.AppointmentDate, booking_data.AppointmentTime,
+            slot_duration_minutes  # Pass the dynamic slot duration
         )
         
         if not slot_dcid:
             raise HTTPException(400, f"Booking validation failed: {error_message}")
+        
         
         phone_number = booking_data.patient_info.contact_number
         facility_id = booking_data.facility_id
@@ -729,30 +715,16 @@ def dashboard_patient_lookup(
     except Exception as e:
         raise HTTPException(500, f"Error looking up patients: {str(e)}")
 
-
 @router.post("/book-existing", response_model=DashboardAppointmentResponse)
 def book_appointment_for_existing_patient(
-    booking_data: QuickAppointmentCreate = Body(
-        ...,
-        example={
-            "patient_id": 0,
-            "doctor_id": 0,
-            "facility_id": 0,
-            "AppointmentDate": str(date.today()),
-            "AppointmentTime": "",
-            "Reason": "string",
-            "AppointmentMode": "A",
-            "room_id": 1,
-            "payment_status": 0,
-            "payment_method": "Cash"
-        }
-    ),
+    booking_data: QuickAppointmentCreate = Body(...),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Enhanced Quick booking for existing patients using patient_id (Requires Authentication)"""
     try:
-        schedule_valid, schedule_message = check_doctor_schedule_enhanced(
+        # Get schedule validation with slot duration
+        schedule_valid, schedule_message, slot_duration = check_doctor_schedule_enhanced(
             db, booking_data.doctor_id, booking_data.facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
@@ -760,13 +732,19 @@ def book_appointment_for_existing_patient(
         if not schedule_valid:
             raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
         
+        # Use the slot duration from the schedule (default to 15 if not found)
+        slot_duration_minutes = slot_duration if slot_duration else 15
+        
         slot_dcid, error_message = find_or_create_available_slot(
             db, booking_data.doctor_id, booking_data.facility_id,
-            booking_data.AppointmentDate, booking_data.AppointmentTime
+            booking_data.AppointmentDate, booking_data.AppointmentTime,
+            slot_duration_minutes  # Pass the dynamic slot duration
         )
         
         if not slot_dcid:
             raise HTTPException(400, f"Booking validation failed: {error_message}")
+        
+        # ... rest of the function remains the same ...
         
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == booking_data.patient_id,
