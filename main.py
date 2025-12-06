@@ -20,7 +20,7 @@ from router import (
     doctor_schedule, 
     appointment, medical_record, billing,
     medical_document, login, dashboard, new_booking,
-    patient_diagnosis, patient_reports,
+    patient_diagnosis,templates, patient_reports,
     admin
 )
 import model
@@ -42,7 +42,7 @@ app.add_middleware(
 )
 
 # Jinja2 templates directory
-templates = Jinja2Templates(directory="templates")
+jinja_templates = Jinja2Templates(directory="templatess")
 
 # Dummy model for Razorpay Payment - if needed
 class PatientPayment(BaseModel):
@@ -95,6 +95,7 @@ app.include_router(medical_record.router)
 app.include_router(patient_diagnosis.router)
 app.include_router(patient_reports.router)
 app.include_router(medical_document.router)
+app.include_router(templates.router)
 
 # Billing
 app.include_router(billing.router)
@@ -144,7 +145,7 @@ async def read_item(request: Request, order_ID: str, db: Session = Depends(get_d
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     
-    return templates.TemplateResponse("index.html", {
+    return jinja_templates.TemplateResponse("index.html", {
         "request": request,
         "amount": patient.amount,
         "order_id": order_ID,

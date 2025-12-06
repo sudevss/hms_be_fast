@@ -20,6 +20,16 @@ class Facility(Base):
     doctor_schedules = relationship("DoctorSchedule", back_populates="facility")
     booked_slots = relationship("DoctorBookedSlots", back_populates="facility")
     appointments = relationship("Appointment", back_populates="facility")
+    templates = relationship("Template", back_populates="facility")
+    drugs = relationship("DrugMaster", back_populates="facility")
+    symptoms = relationship("SymptomMaster", back_populates="facility")
+    lab_tests = relationship("LabMaster", back_populates="facility")
+    diagnosis_symptoms = relationship("DiagnosisSymptoms", back_populates="facility")
+    diagnosis_prescriptions = relationship("DiagnosisPrescription", back_populates="facility")
+    diagnosis_lab_tests = relationship("DiagnosisLabTests", back_populates="facility")
+    diagnosis_procedures = relationship("DiagnosisProcedures", back_populates="facility")
+    patient_diagnoses = relationship("PatientDiagnosis", back_populates="facility")
+    patient_reports = relationship("PatientReports", back_populates="facility")
 
 class Doctors(Base):
     __tablename__ = "doctors"
@@ -48,6 +58,7 @@ class Doctors(Base):
     appointments = relationship("Appointment", back_populates="doctor")
     medical_records = relationship("MedicalRecord", back_populates="doctor")
     medical_documents = relationship("MedicalDocument", back_populates="doctor")
+    patient_diagnoses = relationship("PatientDiagnosis", foreign_keys="[PatientDiagnosis.doctor_id]", back_populates="doctor")
 
 class Patients(Base):
     __tablename__ = "patients"
@@ -81,6 +92,7 @@ class Patients(Base):
     medical_records = relationship("MedicalRecord", back_populates="patient")
     medical_documents = relationship("MedicalDocument", back_populates="patient")
     last_visited_doctor = relationship("Doctors", foreign_keys=[last_visited_doctor_id])
+    patient_diagnoses = relationship("PatientDiagnosis", back_populates="patient")
 
 class UserMaster(Base):
     __tablename__ = "usermaster"
@@ -183,6 +195,7 @@ class Appointment(Base):
     doctor = relationship("Doctors", back_populates="appointments")
     facility = relationship("Facility", back_populates="appointments")
     booked_slot = relationship("DoctorBookedSlots", back_populates="appointments")
+    patient_diagnoses = relationship("PatientDiagnosis", back_populates="appointment")
 
     _table_args_ = (
         CheckConstraint("AppointmentMode IN ('a','A','w','W')", name="check_appointment_mode"),
@@ -248,36 +261,405 @@ class MedicalDocument(Base):
     doctor = relationship("Doctors", back_populates="medical_documents")
     facility = relationship("Facility")
 
-class PatientDiagnosis(Base):
-    __tablename__ = "patient_diagnosis"
 
+
+# ==================== MASTER TABLES ====================
+
+class Template(Base):
+    """Master template table for diagnosis templates"""
+    __tablename__ = "template"
+    
+    template_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    template_name = Column(String(255), nullable=False)
+    template_type = Column(String(50), nullable=False)
+    description = Column(Text)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    deleted_by = Column(Integer, ForeignKey("doctors.id"))
+    deleted_at = Column(DateTime)
+    
+    # Relationships
+    facility = relationship("Facility")
+    symptoms = relationship("SymptomTemplate", back_populates="template", cascade="all, delete-orphan")
+    prescriptions = relationship("PrescriptionTemplate", back_populates="template", cascade="all, delete-orphan")
+    lab_tests = relationship("LabTemplate", back_populates="template", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_template_facility", "facility_id"),
+        Index("idx_template_type", "template_type"),
+        Index("idx_template_active", "is_active"),
+        Index("idx_template_deleted", "is_deleted"),
+        Index("idx_template_name_facility", "template_name", "facility_id", "is_deleted", unique=True),
+        CheckConstraint("LENGTH(template_name) >= 3", name="chk_template_name_length"),
+        CheckConstraint("LENGTH(template_type) >= 2", name="chk_template_type_length"),
+    )
+
+
+class DrugMaster(Base):
+    """Master table for all medicines/drugs"""
+    __tablename__ = "drug_master"
+    
+    medicine_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    medicine_name = Column(String(255), nullable=False, index=True)
+    generic_name = Column(String(255))
+    strength = Column(String(100))
+    medicine_type = Column(String(100))
+    composition_text = Column(Text)
+    price = Column(Numeric(10, 2))
+    manufacturer = Column(String(255))
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    deleted_by = Column(Integer, ForeignKey("doctors.id"))
+    deleted_at = Column(DateTime)
+    
+    # Relationships
+    facility = relationship("Facility")
+    prescription_templates = relationship("PrescriptionTemplate", back_populates="medicine")
+    diagnosis_prescriptions = relationship("DiagnosisPrescription", back_populates="medicine")
+    
+    __table_args__ = (
+        Index("idx_drug_facility", "facility_id"),
+        Index("idx_drug_name", "medicine_name"),
+        Index("idx_drug_generic", "generic_name"),
+        Index("idx_drug_deleted", "is_deleted"),
+        CheckConstraint("LENGTH(medicine_name) >= 2", name="chk_medicine_name_length"),
+        CheckConstraint("price IS NULL OR price >= 0", name="chk_drug_price_positive"),
+    )
+
+
+class SymptomMaster(Base):
+    """Master table for all symptoms"""
+    __tablename__ = "symptom_master"
+    
+    symptom_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    symptom_name = Column(String(255), nullable=False, index=True)
+    description = Column(Text)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    deleted_by = Column(Integer, ForeignKey("doctors.id"))
+    deleted_at = Column(DateTime)
+    
+    # Relationships
+    facility = relationship("Facility")
+    symptom_templates = relationship("SymptomTemplate", back_populates="symptom")
+    diagnosis_symptoms = relationship("DiagnosisSymptoms", back_populates="symptom")
+    
+    __table_args__ = (
+        Index("idx_symptom_facility", "facility_id"),
+        Index("idx_symptom_deleted", "is_deleted"),
+        Index("idx_symptom_name_facility", "symptom_name", "facility_id", "is_deleted", unique=True),
+        CheckConstraint("LENGTH(symptom_name) >= 2", name="chk_symptom_name_length"),
+    )
+
+
+class LabMaster(Base):
+    """Master table for all lab tests"""
+    __tablename__ = "lab_master"
+    
+    test_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    test_name = Column(String(255), nullable=False, index=True)
+    description = Column(Text)
+    prerequisite_text = Column(Text)
+    price = Column(Numeric(10, 2))
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    deleted_by = Column(Integer, ForeignKey("doctors.id"))
+    deleted_at = Column(DateTime)
+    
+    # Relationships
+    facility = relationship("Facility")
+    lab_templates = relationship("LabTemplate", back_populates="test")
+    diagnosis_lab_tests = relationship("DiagnosisLabTests", back_populates="test")
+    
+    __table_args__ = (
+        Index("idx_lab_facility", "facility_id"),
+        Index("idx_lab_deleted", "is_deleted"),
+        Index("idx_lab_name_facility", "test_name", "facility_id", "is_deleted", unique=True),
+        CheckConstraint("LENGTH(test_name) >= 2", name="chk_test_name_length"),
+        CheckConstraint("price IS NULL OR price >= 0", name="chk_lab_price_positive"),
+    )
+
+
+# ==================== TEMPLATE JUNCTION TABLES ====================
+
+class SymptomTemplate(Base):
+    """Links symptoms to templates"""
+    __tablename__ = "symptom_template"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("template.template_id", ondelete="CASCADE"), nullable=False)
+    symptom_id = Column(Integer, ForeignKey("symptom_master.symptom_id"), nullable=False)
+    default_duration_days = Column(Integer)
+    default_remarks = Column(Text)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    
+    # Relationships
+    template = relationship("Template", back_populates="symptoms")
+    symptom = relationship("SymptomMaster", back_populates="symptom_templates")
+    
+    __table_args__ = (
+        Index("idx_symptom_template", "template_id", "symptom_id", unique=True),
+        CheckConstraint("default_duration_days IS NULL OR default_duration_days > 0", name="chk_symptom_duration_positive"),
+    )
+
+
+class PrescriptionTemplate(Base):
+    """Links medicines to templates with dosage info"""
+    __tablename__ = "prescription_template"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("template.template_id", ondelete="CASCADE"), nullable=False)
+    medicine_id = Column(Integer, ForeignKey("drug_master.medicine_id"), nullable=False)
+    morning_dosage = Column(String(50))
+    afternoon_dosage = Column(String(50))
+    night_dosage = Column(String(50))
+    food_timing = Column(String(50))
+    duration_days = Column(Integer)
+    special_instructions = Column(Text)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    
+    # Relationships
+    template = relationship("Template", back_populates="prescriptions")
+    medicine = relationship("DrugMaster", back_populates="prescription_templates")
+    
+    __table_args__ = (
+        Index("idx_prescription_template", "template_id", "medicine_id", unique=True),
+        CheckConstraint("duration_days IS NULL OR duration_days > 0", name="chk_prescription_duration_positive"),
+    )
+
+
+class LabTemplate(Base):
+    """Links lab tests to templates"""
+    __tablename__ = "lab_template"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("template.template_id", ondelete="CASCADE"), nullable=False)
+    test_id = Column(Integer, ForeignKey("lab_master.test_id"), nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    
+    # Relationships
+    template = relationship("Template", back_populates="lab_tests")
+    test = relationship("LabMaster", back_populates="lab_templates")
+    
+    __table_args__ = (
+        Index("idx_lab_template", "template_id", "test_id", unique=True),
+    )
+
+
+# ==================== ACTUAL DIAGNOSIS DATA TABLES ====================
+
+class DiagnosisSymptoms(Base):
+    """Actual symptoms recorded for a patient diagnosis"""
+    __tablename__ = "diagnosis_symptoms"
+    
+    patient_symptom_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
+    symptom_id = Column(Integer, ForeignKey("symptom_master.symptom_id"), nullable=False)
+    duration_days = Column(Integer)
+    remarks = Column(Text)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis", back_populates="symptoms")
+    symptom = relationship("SymptomMaster", back_populates="diagnosis_symptoms")
+    
+    __table_args__ = (
+        Index("idx_diagnosis_symptom", "diagnosis_id", "symptom_id"),
+        Index("idx_diagnosis_symptom_facility", "facility_id"),
+        CheckConstraint("duration_days IS NULL OR duration_days > 0", name="chk_diagnosis_symptom_duration_positive"),
+    )
+
+
+class DiagnosisPrescription(Base):
+    """Actual prescriptions for a patient diagnosis"""
+    __tablename__ = "diagnosis_prescription"
+    
+    prescription_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
+    medicine_id = Column(Integer, ForeignKey("drug_master.medicine_id"), nullable=False)
+    morning_dosage = Column(String(50))
+    afternoon_dosage = Column(String(50))
+    night_dosage = Column(String(50))
+    food_timing = Column(String(50))
+    duration_days = Column(Integer)
+    special_instructions = Column(Text)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis", back_populates="prescriptions")
+    medicine = relationship("DrugMaster", back_populates="diagnosis_prescriptions")
+    
+    __table_args__ = (
+        Index("idx_diagnosis_prescription", "diagnosis_id", "medicine_id"),
+        Index("idx_diagnosis_prescription_facility", "facility_id"),
+        CheckConstraint("duration_days IS NULL OR duration_days > 0", name="chk_diagnosis_prescription_duration_positive"),
+    )
+
+
+class DiagnosisLabTests(Base):
+    """Actual lab tests ordered for a patient diagnosis"""
+    __tablename__ = "diagnosis_lab_tests"
+    
+    lab_test_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
+    test_id = Column(Integer, ForeignKey("lab_master.test_id"), nullable=False)
+    prerequisite_text = Column(Text)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis", back_populates="lab_tests")
+    test = relationship("LabMaster", back_populates="diagnosis_lab_tests")
+    
+    __table_args__ = (
+        Index("idx_diagnosis_lab_test", "diagnosis_id", "test_id"),
+        Index("idx_diagnosis_lab_test_facility", "facility_id"),
+    )
+
+
+class DiagnosisProcedures(Base):
+    """Procedures recommended/performed for a patient diagnosis"""
+    __tablename__ = "diagnosis_procedures"
+    
+    procedure_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
+    procedure_text = Column(Text, nullable=False)
+    price = Column(Numeric(10, 2))
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis", back_populates="procedures")
+    
+    __table_args__ = (
+        Index("idx_diagnosis_procedure", "diagnosis_id"),
+        Index("idx_diagnosis_procedure_facility", "facility_id"),
+        CheckConstraint("LENGTH(procedure_text) >= 5", name="chk_procedure_text_length"),
+        CheckConstraint("price IS NULL OR price >= 0", name="chk_procedure_price_positive"),
+    )
+
+
+# ==================== UPDATED PATIENT DIAGNOSIS TABLE ====================
+
+class PatientDiagnosis(Base):
+    """Updated patient diagnosis table"""
+    __tablename__ = "patient_diagnosis"
+    
     diagnosis_id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
-    DATE = Column(Date, nullable=False)
     appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
-    VITAL_BP = Column(String(50))
-    VITAL_HR = Column(String(50))
-    VITAL_TEMP = Column(String(50))
-    VITAL_SPO2 = Column(String(50))
-    CHIEF_COMPLAINT = Column(Text)
-    ASSESSMENT_NOTES = Column(Text)
-    TREATMENT_PLAN = Column(Text)
-    RECOMM_TESTS = Column(Text)
-    FOLLOWUP_DATE = Column(Date)
-    weight = Column(String(50))
+    date = Column(Date, nullable=False, index=True)
+    
+    # Vitals
+    vital_bp = Column(String(50))
+    vital_hr = Column(String(50))
+    vital_temp = Column(String(50))
+    vital_spo2 = Column(String(50))
     height = Column(String(50))
-
+    weight = Column(String(50))
+    
+    # Chief complaint and template info
+    chief_complaint = Column(Text)
+    template_id = Column(Integer, ForeignKey("template.template_id"))
+    
+    # Follow-up
+    followup_date = Column(Date)
+    
+    # Soft delete
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    deleted_by = Column(Integer, ForeignKey("doctors.id"))
+    deleted_at = Column(DateTime)
+    
     # Relationships
     facility = relationship("Facility")
     patient = relationship("Patients")
     appointment = relationship("Appointment")
-    doctor = relationship("Doctors")
-
-    _table_args_ = (
-        Index("idx_patient_diagnosis_date", "patient_id", "DATE"),
+    doctor = relationship("Doctors",foreign_keys=[doctor_id])
+    template = relationship("Template")
+    
+    # One-to-many relationships with actual diagnosis data
+    symptoms = relationship("DiagnosisSymptoms", back_populates="diagnosis", cascade="all, delete-orphan")
+    prescriptions = relationship("DiagnosisPrescription", back_populates="diagnosis", cascade="all, delete-orphan")
+    lab_tests = relationship("DiagnosisLabTests", back_populates="diagnosis", cascade="all, delete-orphan")
+    procedures = relationship("DiagnosisProcedures", back_populates="diagnosis", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_patient_diagnosis_date", "patient_id", "date"),
         Index("idx_facility_patient", "facility_id", "patient_id"),
+        Index("idx_diagnosis_doctor", "doctor_id", "date"),
+        Index("idx_diagnosis_deleted", "is_deleted"),
+        CheckConstraint("followup_date IS NULL OR followup_date > date", name="chk_followup_after_diagnosis"),
     )
 
 class PatientReports(Base):
@@ -304,3 +686,5 @@ class PatientReports(Base):
         Index("idx_patient_reports_date", "DATE"),
         Index("idx_patient_reports_appointment", "appointment_id"),
     )
+
+    

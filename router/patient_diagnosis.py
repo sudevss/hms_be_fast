@@ -1,20 +1,20 @@
-
 from typing import List, Optional, Dict, Any
-from datetime import date
+from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, APIRouter, Depends, Query
-from sqlalchemy import and_
+from sqlalchemy import and_, desc
 
-# Import your existing database setup and models (same as doctor.py)
 import model
-from database import engine, SessionLocal
-from auth_middleware import get_current_user, CurrentUser, require_roles
+from database import SessionLocal
+from auth_middleware import get_current_user, CurrentUser
 
-# Create all tables
-model.Base.metadata.create_all(bind=engine)
+router = APIRouter(
+    prefix="/patient_diagnosis",
+    tags=["patient-diagnosis"],
+    responses={404: {"description": "Not found"}}
+)
 
-# Database dependency (same as doctor.py)
 def get_db():
     try:
         db = SessionLocal()
@@ -22,38 +22,63 @@ def get_db():
     finally:
         db.close()
 
-# Create API Router
-router = APIRouter(
-    prefix="/patient_diagnosis",
-    tags=["patient-diagnosis"],
-    responses={404: {"description": "Not found"}}
-)
+# ==================== PYDANTIC MODELS ====================
 
-# Pydantic Models for Request/Response
+class DiagnosisSymptomItem(BaseModel):
+    symptom_id: int
+    duration_days: Optional[int] = Field(None, gt=0)
+    remarks: Optional[str] = None
+
+class DiagnosisPrescriptionItem(BaseModel):
+    medicine_id: int
+    morning_dosage: Optional[str] = Field(None, max_length=50)
+    afternoon_dosage: Optional[str] = Field(None, max_length=50)
+    night_dosage: Optional[str] = Field(None, max_length=50)
+    food_timing: Optional[str] = Field(None, max_length=50)
+    duration_days: Optional[int] = Field(None, gt=0)
+    special_instructions: Optional[str] = None
+
+class DiagnosisLabTestItem(BaseModel):
+    test_id: int
+    prerequisite_text: Optional[str] = None
+
+class DiagnosisProcedureItem(BaseModel):
+    procedure_text: str = Field(..., min_length=5)
+    price: Optional[float] = Field(None, ge=0)
+
 class PatientDiagnosisCreate(BaseModel):
-    """Request model for creating/updating patient diagnosis - all fields included"""
+    """Request model for creating/updating patient diagnosis"""
     diagnosis_id: Optional[int] = Field(None, description="Diagnosis ID for update, null for create")
     facility_id: int = Field(..., description="Facility ID where diagnosis was made")
     patient_id: int = Field(..., description="Patient ID")
     diagnosis_date: date = Field(..., description="Diagnosis date")
     appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
     doctor_id: int = Field(..., description="Doctor ID who made the diagnosis")
+    
+    # Vitals
     vital_bp: Optional[str] = Field(None, max_length=50, description="Blood pressure reading")
     vital_hr: Optional[str] = Field(None, max_length=50, description="Heart rate")
     vital_temp: Optional[str] = Field(None, max_length=50, description="Temperature")
     vital_spo2: Optional[str] = Field(None, max_length=50, description="Blood oxygen saturation")
     weight: Optional[str] = Field(None, max_length=50, description="Patient weight")
     height: Optional[str] = Field(None, max_length=50, description="Patient height")
+    
+    # Chief complaint and template
     chief_complaint: Optional[str] = Field(None, description="Patient's chief complaint")
-    assessment_notes: Optional[str] = Field(None, description="Doctor's assessment notes")
-    treatment_plan: Optional[str] = Field(None, description="Prescribed treatment plan")
-    recomm_tests: Optional[str] = Field(None, description="Recommended tests")
-    followup_date: Optional[date] = Field(None, description="Follow-up appointment date (optional)")
+    template_id: Optional[int] = Field(None, description="Template ID if using a template")
+    
+    # Follow-up
+    followup_date: Optional[date] = Field(None, description="Follow-up appointment date")
+    
+    # Detailed diagnosis data
+    symptoms: List[DiagnosisSymptomItem] = Field(default=[], description="List of symptoms")
+    prescriptions: List[DiagnosisPrescriptionItem] = Field(default=[], description="List of prescriptions")
+    lab_tests: List[DiagnosisLabTestItem] = Field(default=[], description="List of lab tests")
+    procedures: List[DiagnosisProcedureItem] = Field(default=[], description="List of procedures")
 
-    @field_validator('appointment_id', 'diagnosis_id')
+    @field_validator('appointment_id', 'diagnosis_id', 'template_id')
     @classmethod
     def validate_optional_ids(cls, v):
-        """Convert 0 to None for optional foreign key fields"""
         if v == 0:
             return None
         return v
@@ -65,56 +90,173 @@ class PatientDiagnosisCreate(BaseModel):
         json_schema_extra = {
             "example": {
                 "diagnosis_id": None,
-                "facility_id": 1,
-                "patient_id": 1,
-                "diagnosis_date": "2025-09-15",
+                "facility_id": 0,
+                "patient_id": 0,
+                "diagnosis_date": "2025-11-29",
                 "appointment_id": None,
-                "doctor_id": 1,
-                "vital_bp": "120/80",
-                "vital_hr": "72",
-                "vital_temp": "98.6",
-                "vital_spo2": "99",
-                "weight": "70.5",
-                "height": "175",
-                "chief_complaint": "Chest pain and shortness of breath",
-                "assessment_notes": "Patient presents with mild chest discomfort, likely muscular strain",
-                "treatment_plan": "Rest, pain medication as needed, follow-up in 1 week",
-                "recomm_tests": "ECG, Complete Blood Count, Chest X-ray",
-                "followup_date": None
+                "doctor_id": 0,
+                "vital_bp": "",
+                "vital_hr": "",
+                "vital_temp": "",
+                "vital_spo2": "",
+                "weight": "",
+                "height": "",
+                "chief_complaint": "",
+                "template_id": 0,
+                "followup_date": "2025-12-06",
+                "symptoms": [
+                    {"symptom_id": 0, "duration_days": 0, "remarks": "High fever"},
+                    {"symptom_id": 0, "duration_days": 0, "remarks": "Body ache"}
+                ],
+                "prescriptions": [
+                    {
+                        "medicine_id": 0,
+                        "morning_dosage": "0",
+                        "afternoon_dosage": "0",
+                        "night_dosage": "0",
+                        "food_timing": "",
+                        "duration_days": 0
+                    }
+                ],
+                "lab_tests": [
+                    {"test_id": 0, "prerequisite_text": "Fasting required"}
+                ],
+                "procedures": [
+                    {"procedure_text": "Blood pressure monitoring", "price": 50.0}
+                ]
             }
         }
+        
 
-# Helper function to convert SQLAlchemy model to dict
-def diagnosis_to_dict(diagnosis) -> Dict[str, Any]:
-    """Convert PatientDiagnosis object to dictionary for JSON response"""
-    return {
+class LoadTemplateRequest(BaseModel):
+    """Request to load template data for a diagnosis"""
+    template_id: int
+
+# ==================== HELPER FUNCTIONS ====================
+
+def diagnosis_to_dict(diagnosis, include_details: bool = True) -> Dict[str, Any]:
+    """Convert PatientDiagnosis object to dictionary"""
+    result = {
         "diagnosis_id": diagnosis.diagnosis_id,
         "facility_id": diagnosis.facility_id,
         "patient_id": diagnosis.patient_id,
-        "diagnosis_date": diagnosis.DATE.isoformat() if diagnosis.DATE else None,
+        "diagnosis_date": diagnosis.date.isoformat() if diagnosis.date else None,
         "appointment_id": diagnosis.appointment_id,
         "doctor_id": diagnosis.doctor_id,
-        "vital_bp": diagnosis.VITAL_BP,
-        "vital_hr": diagnosis.VITAL_HR,
-        "vital_temp": diagnosis.VITAL_TEMP,
-        "vital_spo2": diagnosis.VITAL_SPO2,
+        "vital_bp": diagnosis.vital_bp,
+        "vital_hr": diagnosis.vital_hr,
+        "vital_temp": diagnosis.vital_temp,
+        "vital_spo2": diagnosis.vital_spo2,
         "weight": diagnosis.weight,
         "height": diagnosis.height,
-        "chief_complaint": diagnosis.CHIEF_COMPLAINT,
-        "assessment_notes": diagnosis.ASSESSMENT_NOTES,
-        "treatment_plan": diagnosis.TREATMENT_PLAN,
-        "recomm_tests": diagnosis.RECOMM_TESTS,
-        "followup_date": diagnosis.FOLLOWUP_DATE.isoformat() if diagnosis.FOLLOWUP_DATE else None
+        "chief_complaint": diagnosis.chief_complaint,
+        "template_id": diagnosis.template_id,
+        "followup_date": diagnosis.followup_date.isoformat() if diagnosis.followup_date else None
     }
+    
+    if include_details:
+        result["symptoms"] = [{
+            "patient_symptom_id": s.patient_symptom_id,
+            "symptom_id": s.symptom_id,
+            "symptom_name": s.symptom.symptom_name if s.symptom else None,
+            "duration_days": s.duration_days,
+            "remarks": s.remarks
+        } for s in diagnosis.symptoms]
+        
+        result["prescriptions"] = [{
+            "prescription_id": p.prescription_id,
+            "medicine_id": p.medicine_id,
+            "medicine_name": p.medicine.medicine_name if p.medicine else None,
+            "generic_name": p.medicine.generic_name if p.medicine else None,
+            "strength": p.medicine.strength if p.medicine else None,
+            "morning_dosage": p.morning_dosage,
+            "afternoon_dosage": p.afternoon_dosage,
+            "night_dosage": p.night_dosage,
+            "food_timing": p.food_timing,
+            "duration_days": p.duration_days,
+            "special_instructions": p.special_instructions
+        } for p in diagnosis.prescriptions]
+        
+        result["lab_tests"] = [{
+            "lab_test_id": lt.lab_test_id,
+            "test_id": lt.test_id,
+            "test_name": lt.test.test_name if lt.test else None,
+            "prerequisite_text": lt.prerequisite_text,
+            "price": lt.test.price if lt.test else None
+        } for lt in diagnosis.lab_tests]
+        
+        result["procedures"] = [{
+            "procedure_id": proc.procedure_id,
+            "procedure_text": proc.procedure_text,
+            "price": proc.price
+        } for proc in diagnosis.procedures]
+    
+    return result
 
-# Utility function for success responses (same pattern as doctor.py)
-def successful_response(status_code: int, message: str = "Operation successful"):
-    return {
-        "status_code": status_code,
-        "message": message
-    }
+# ==================== API ENDPOINTS ====================
 
-# API Endpoints
+@router.post("/load-template", tags=["patient-diagnosis"])
+async def load_template(
+    request: LoadTemplateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Load template data to populate diagnosis form.
+    Returns symptoms, prescriptions, and lab tests from the template.
+    Doctor can then modify before saving.
+    """
+    try:
+        template = db.query(model.Template).options(
+            joinedload(model.Template.symptoms).joinedload(model.SymptomTemplate.symptom),
+            joinedload(model.Template.prescriptions).joinedload(model.PrescriptionTemplate.medicine),
+            joinedload(model.Template.lab_tests).joinedload(model.LabTemplate.test)
+        ).filter(
+            model.Template.template_id == request.template_id,
+            model.Template.is_active == True,
+            model.Template.is_deleted == False
+        ).first()
+        
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found or inactive")
+        
+        return {
+            "status_code": 200,
+            "message": "Template loaded successfully",
+            "data": {
+                "template_id": template.template_id,
+                "template_name": template.template_name,
+                "template_type": template.template_type,
+                "symptoms": [{
+                    "symptom_id": st.symptom_id,
+                    "symptom_name": st.symptom.symptom_name,
+                    "duration_days": st.default_duration_days,
+                    "remarks": st.default_remarks
+                } for st in template.symptoms],
+                "prescriptions": [{
+                    "medicine_id": pt.medicine_id,
+                    "medicine_name": pt.medicine.medicine_name,
+                    "generic_name": pt.medicine.generic_name,
+                    "strength": pt.medicine.strength,
+                    "morning_dosage": pt.morning_dosage,
+                    "afternoon_dosage": pt.afternoon_dosage,
+                    "night_dosage": pt.night_dosage,
+                    "food_timing": pt.food_timing,
+                    "duration_days": pt.duration_days,
+                    "special_instructions": pt.special_instructions
+                } for pt in template.prescriptions],
+                "lab_tests": [{
+                    "test_id": lt.test_id,
+                    "test_name": lt.test.test_name,
+                    "prerequisite_text": lt.test.prerequisite_text
+                } for lt in template.lab_tests]
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading template: {str(e)}")
+
 @router.put("/", tags=["patient-diagnosis"])
 async def create_or_update_patient_diagnosis(
     diagnosis_data: PatientDiagnosisCreate,
@@ -122,40 +264,38 @@ async def create_or_update_patient_diagnosis(
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """
-    Create or update a patient diagnosis record.
+    Create or update a patient diagnosis record with all related data.
     
-    If diagnosis_id is null: Creates a new diagnosis record
-    If diagnosis_id is provided: Updates the existing diagnosis record
+    If diagnosis_id is null: Creates new diagnosis
+    If diagnosis_id is provided: Updates existing diagnosis
     
-    All required fields must be provided:
-    - facility_id: ID of the facility (required)
-    - patient_id: ID of the patient (required)
-    - diagnosis_date: Date of diagnosis (required)
-    - doctor_id: ID of the doctor making the diagnosis (required)
-    
-    Returns: JSON object with success message and created/updated record
+    This endpoint handles:
+    - Basic diagnosis info (vitals, chief complaint, etc.)
+    - Symptoms
+    - Prescriptions
+    - Lab tests
+    - Procedures
     """
     try:
         # Verify user belongs to the same facility
         if diagnosis_data.facility_id != current_user.facility_id:
             raise HTTPException(status_code=403, detail="You can only access data from your facility")
         
-        # Validate that the facility exists
-        if diagnosis_data.facility_id:
-            facility = db.query(model.Facility).filter(
-                model.Facility.facility_id == diagnosis_data.facility_id
-            ).first()
-            if not facility:
-                raise HTTPException(status_code=400, detail="Facility not found")
+        # Validate facility
+        facility = db.query(model.Facility).filter(
+            model.Facility.facility_id == diagnosis_data.facility_id
+        ).first()
+        if not facility:
+            raise HTTPException(status_code=400, detail="Facility not found")
         
-        # Validate that the patient exists
+        # Validate patient
         patient = db.query(model.Patients).filter(
             model.Patients.id == diagnosis_data.patient_id
         ).first()
         if not patient:
             raise HTTPException(status_code=400, detail="Patient not found")
         
-        # Validate that the doctor exists
+        # Validate doctor
         doctor = db.query(model.Doctors).filter(
             model.Doctors.id == diagnosis_data.doctor_id,
             model.Doctors.is_deleted == False,
@@ -172,9 +312,23 @@ async def create_or_update_patient_diagnosis(
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
         
-        # Check if this is an update or create operation
+        # Validate template if provided
+        if diagnosis_data.template_id:
+            template = db.query(model.Template).filter(
+                model.Template.template_id == diagnosis_data.template_id,
+                model.Template.is_deleted == False,
+                model.Template.is_active == True
+            ).first()
+            if not template:
+                raise HTTPException(status_code=400, detail="Template not found or inactive")
+        
+        # Validate followup_date is after diagnosis_date
+        if diagnosis_data.followup_date and diagnosis_data.followup_date <= diagnosis_data.diagnosis_date:
+            raise HTTPException(status_code=400, detail="Follow-up date must be after diagnosis date")
+        
+        # Check if this is UPDATE or CREATE
         if diagnosis_data.diagnosis_id is not None:
-            # UPDATE existing diagnosis
+            # UPDATE EXISTING DIAGNOSIS
             existing_diagnosis = db.query(model.PatientDiagnosis).filter(
                 model.PatientDiagnosis.diagnosis_id == diagnosis_data.diagnosis_id
             ).first()
@@ -182,64 +336,132 @@ async def create_or_update_patient_diagnosis(
             if not existing_diagnosis:
                 raise HTTPException(status_code=404, detail="Diagnosis record not found")
             
-            # Update fields
+            # Update basic fields
             existing_diagnosis.facility_id = diagnosis_data.facility_id
             existing_diagnosis.patient_id = diagnosis_data.patient_id
-            existing_diagnosis.DATE = diagnosis_data.diagnosis_date
+            existing_diagnosis.date = diagnosis_data.diagnosis_date
             existing_diagnosis.appointment_id = diagnosis_data.appointment_id
             existing_diagnosis.doctor_id = diagnosis_data.doctor_id
-            existing_diagnosis.VITAL_BP = diagnosis_data.vital_bp
-            existing_diagnosis.VITAL_HR = diagnosis_data.vital_hr
-            existing_diagnosis.VITAL_TEMP = diagnosis_data.vital_temp
-            existing_diagnosis.VITAL_SPO2 = diagnosis_data.vital_spo2
+            existing_diagnosis.vital_bp = diagnosis_data.vital_bp
+            existing_diagnosis.vital_hr = diagnosis_data.vital_hr
+            existing_diagnosis.vital_temp = diagnosis_data.vital_temp
+            existing_diagnosis.vital_spo2 = diagnosis_data.vital_spo2
             existing_diagnosis.weight = diagnosis_data.weight
             existing_diagnosis.height = diagnosis_data.height
-            existing_diagnosis.CHIEF_COMPLAINT = diagnosis_data.chief_complaint
-            existing_diagnosis.ASSESSMENT_NOTES = diagnosis_data.assessment_notes
-            existing_diagnosis.TREATMENT_PLAN = diagnosis_data.treatment_plan
-            existing_diagnosis.RECOMM_TESTS = diagnosis_data.recomm_tests
-            existing_diagnosis.FOLLOWUP_DATE = diagnosis_data.followup_date
+            existing_diagnosis.chief_complaint = diagnosis_data.chief_complaint
+            existing_diagnosis.template_id = diagnosis_data.template_id
+            existing_diagnosis.followup_date = diagnosis_data.followup_date
+            existing_diagnosis.updated_by = current_user.user_id
             
-            db.commit()
-            db.refresh(existing_diagnosis)
+            # Delete existing related data
+            db.query(model.DiagnosisSymptoms).filter(
+                model.DiagnosisSymptoms.diagnosis_id == diagnosis_data.diagnosis_id
+            ).delete()
+            db.query(model.DiagnosisPrescription).filter(
+                model.DiagnosisPrescription.diagnosis_id == diagnosis_data.diagnosis_id
+            ).delete()
+            db.query(model.DiagnosisLabTests).filter(
+                model.DiagnosisLabTests.diagnosis_id == diagnosis_data.diagnosis_id
+            ).delete()
+            db.query(model.DiagnosisProcedures).filter(
+                model.DiagnosisProcedures.diagnosis_id == diagnosis_data.diagnosis_id
+            ).delete()
             
-            return {
-                "status_code": 200,
-                "message": "Patient diagnosis updated successfully",
-                "data": diagnosis_to_dict(existing_diagnosis)
-            }
+            diagnosis_id = existing_diagnosis.diagnosis_id
+            message = "Patient diagnosis updated successfully"
+            status_code = 200
+            
         else:
-            # CREATE new diagnosis
-            diagnosis_dict = {
-                "facility_id": diagnosis_data.facility_id,
-                "patient_id": diagnosis_data.patient_id,
-                "DATE": diagnosis_data.diagnosis_date,
-                "appointment_id": diagnosis_data.appointment_id,
-                "doctor_id": diagnosis_data.doctor_id,
-                "VITAL_BP": diagnosis_data.vital_bp,
-                "VITAL_HR": diagnosis_data.vital_hr,
-                "VITAL_TEMP": diagnosis_data.vital_temp,
-                "VITAL_SPO2": diagnosis_data.vital_spo2,
-                "weight": diagnosis_data.weight,
-                "height": diagnosis_data.height,
-                "CHIEF_COMPLAINT": diagnosis_data.chief_complaint,
-                "ASSESSMENT_NOTES": diagnosis_data.assessment_notes,
-                "TREATMENT_PLAN": diagnosis_data.treatment_plan,
-                "RECOMM_TESTS": diagnosis_data.recomm_tests,
-                "FOLLOWUP_DATE": diagnosis_data.followup_date
-            }
-            
-            new_diagnosis = model.PatientDiagnosis(**diagnosis_dict)
+            # CREATE NEW DIAGNOSIS
+            new_diagnosis = model.PatientDiagnosis(
+                facility_id=diagnosis_data.facility_id,
+                patient_id=diagnosis_data.patient_id,
+                date=diagnosis_data.diagnosis_date,
+                appointment_id=diagnosis_data.appointment_id,
+                doctor_id=diagnosis_data.doctor_id,
+                vital_bp=diagnosis_data.vital_bp,
+                vital_hr=diagnosis_data.vital_hr,
+                vital_temp=diagnosis_data.vital_temp,
+                vital_spo2=diagnosis_data.vital_spo2,
+                weight=diagnosis_data.weight,
+                height=diagnosis_data.height,
+                chief_complaint=diagnosis_data.chief_complaint,
+                template_id=diagnosis_data.template_id,
+                followup_date=diagnosis_data.followup_date,
+                created_by=current_user.user_id
+            )
             
             db.add(new_diagnosis)
-            db.commit()
-            db.refresh(new_diagnosis)
-            
-            return {
-                "status_code": 201,
-                "message": "Patient diagnosis created successfully",
-                "data": diagnosis_to_dict(new_diagnosis)
-            }
+            db.flush()  # Get diagnosis_id
+            diagnosis_id = new_diagnosis.diagnosis_id
+            message = "Patient diagnosis created successfully"
+            status_code = 201
+        
+        # Add symptoms
+        for symptom_item in diagnosis_data.symptoms:
+            diagnosis_symptom = model.DiagnosisSymptoms(
+                facility_id=diagnosis_data.facility_id,
+                diagnosis_id=diagnosis_id,
+                symptom_id=symptom_item.symptom_id,
+                duration_days=symptom_item.duration_days,
+                remarks=symptom_item.remarks,
+                created_by=current_user.user_id
+            )
+            db.add(diagnosis_symptom)
+        
+        # Add prescriptions
+        for prescription_item in diagnosis_data.prescriptions:
+            diagnosis_prescription = model.DiagnosisPrescription(
+                facility_id=diagnosis_data.facility_id,
+                diagnosis_id=diagnosis_id,
+                medicine_id=prescription_item.medicine_id,
+                morning_dosage=prescription_item.morning_dosage,
+                afternoon_dosage=prescription_item.afternoon_dosage,
+                night_dosage=prescription_item.night_dosage,
+                food_timing=prescription_item.food_timing,
+                duration_days=prescription_item.duration_days,
+                special_instructions=prescription_item.special_instructions,
+                created_by=current_user.user_id
+            )
+            db.add(diagnosis_prescription)
+        
+        # Add lab tests
+        for lab_test_item in diagnosis_data.lab_tests:
+            diagnosis_lab_test = model.DiagnosisLabTests(
+                facility_id=diagnosis_data.facility_id,
+                diagnosis_id=diagnosis_id,
+                test_id=lab_test_item.test_id,
+                prerequisite_text=lab_test_item.prerequisite_text,
+                created_by=current_user.user_id
+            )
+            db.add(diagnosis_lab_test)
+        
+        # Add procedures
+        for procedure_item in diagnosis_data.procedures:
+            diagnosis_procedure = model.DiagnosisProcedures(
+                facility_id=diagnosis_data.facility_id,
+                diagnosis_id=diagnosis_id,
+                procedure_text=procedure_item.procedure_text,
+                price=procedure_item.price,
+                created_by=current_user.user_id
+            )
+            db.add(diagnosis_procedure)
+        
+        db.commit()
+        
+        # Fetch complete diagnosis with all relationships
+        complete_diagnosis = db.query(model.PatientDiagnosis).options(
+            joinedload(model.PatientDiagnosis.symptoms).joinedload(model.DiagnosisSymptoms.symptom),
+            joinedload(model.PatientDiagnosis.prescriptions).joinedload(model.DiagnosisPrescription.medicine),
+            joinedload(model.PatientDiagnosis.lab_tests).joinedload(model.DiagnosisLabTests.test),
+            joinedload(model.PatientDiagnosis.procedures)
+        ).filter(model.PatientDiagnosis.diagnosis_id == diagnosis_id).first()
+        
+        return {
+            "status_code": status_code,
+            "message": message,
+            "data": diagnosis_to_dict(complete_diagnosis, include_details=True)
+        }
         
     except HTTPException:
         raise
@@ -253,32 +475,40 @@ async def get_patient_diagnosis(
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     doctor_id: Optional[int] = Query(None, description="Doctor ID (optional)"),
     diagnosis_date: Optional[date] = Query(None, description="Diagnosis date (optional)"),
+    from_date: Optional[date] = Query(None, description="From date for range query"),
+    to_date: Optional[date] = Query(None, description="To date for range query"),
+    include_details: bool = Query(True, description="Include symptoms, prescriptions, lab tests"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
     Get patient diagnoses with filtering.
     
-    Mandatory parameters:
-    - facility_id: Filter by facility ID
-    - patient_id: Filter by patient ID
-    
-    Optional parameters:
-    - doctor_id: Filter by doctor ID
-    - diagnosis_date: Filter by specific diagnosis date
-    
-    Returns: JSON array of diagnosis records
+    Mandatory: facility_id, patient_id
+    Optional: doctor_id, diagnosis_date, date range, include_details
     """
     try:
         # Verify user belongs to the same facility
         if facility_id != current_user.facility_id:
             raise HTTPException(status_code=403, detail="You can only access data from your facility")
         
-        # Start with mandatory filters
-        query = db.query(model.PatientDiagnosis).filter(
+        # Build query with eager loading if details requested
+        if include_details:
+            query = db.query(model.PatientDiagnosis).options(
+                joinedload(model.PatientDiagnosis.symptoms).joinedload(model.DiagnosisSymptoms.symptom),
+                joinedload(model.PatientDiagnosis.prescriptions).joinedload(model.DiagnosisPrescription.medicine),
+                joinedload(model.PatientDiagnosis.lab_tests).joinedload(model.DiagnosisLabTests.test),
+                joinedload(model.PatientDiagnosis.procedures)
+            )
+        else:
+            query = db.query(model.PatientDiagnosis)
+        
+        # Apply mandatory filters
+        query = query.filter(
             and_(
                 model.PatientDiagnosis.facility_id == facility_id,
-                model.PatientDiagnosis.patient_id == patient_id
+                model.PatientDiagnosis.patient_id == patient_id,
+                model.PatientDiagnosis.is_deleted == False
             )
         )
         
@@ -287,16 +517,22 @@ async def get_patient_diagnosis(
             query = query.filter(model.PatientDiagnosis.doctor_id == doctor_id)
         
         if diagnosis_date is not None:
-            query = query.filter(model.PatientDiagnosis.DATE == diagnosis_date)
+            query = query.filter(model.PatientDiagnosis.date == diagnosis_date)
+        
+        if from_date is not None:
+            query = query.filter(model.PatientDiagnosis.date >= from_date)
+        
+        if to_date is not None:
+            query = query.filter(model.PatientDiagnosis.date <= to_date)
         
         # Order by date (most recent first)
-        query = query.order_by(model.PatientDiagnosis.DATE.desc())
+        query = query.order_by(desc(model.PatientDiagnosis.date))
         
-        # Execute query and get results
+        # Execute query
         diagnoses = query.all()
         
-        # Convert to list of dictionaries for JSON array response
-        result = [diagnosis_to_dict(diagnosis) for diagnosis in diagnoses]
+        # Convert to list of dictionaries
+        result = [diagnosis_to_dict(diagnosis, include_details=include_details) for diagnosis in diagnoses]
         
         return result
         
@@ -304,3 +540,71 @@ async def get_patient_diagnosis(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving diagnoses: {str(e)}")
+
+@router.get("/{diagnosis_id}", tags=["patient-diagnosis"])
+async def get_diagnosis_by_id(
+    diagnosis_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """Get a specific diagnosis by ID with all related data"""
+    try:
+        diagnosis = db.query(model.PatientDiagnosis).options(
+            joinedload(model.PatientDiagnosis.symptoms).joinedload(model.DiagnosisSymptoms.symptom),
+            joinedload(model.PatientDiagnosis.prescriptions).joinedload(model.DiagnosisPrescription.medicine),
+            joinedload(model.PatientDiagnosis.lab_tests).joinedload(model.DiagnosisLabTests.test),
+            joinedload(model.PatientDiagnosis.procedures)
+        ).filter(
+            model.PatientDiagnosis.diagnosis_id == diagnosis_id,
+            model.PatientDiagnosis.is_deleted == False
+        ).first()
+        
+        if not diagnosis:
+            raise HTTPException(status_code=404, detail="Diagnosis not found")
+        
+        # Verify user belongs to the same facility
+        if diagnosis.facility_id != current_user.facility_id:
+            raise HTTPException(status_code=403, detail="You can only access data from your facility")
+        
+        return diagnosis_to_dict(diagnosis, include_details=True)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving diagnosis: {str(e)}")
+
+@router.delete("/{diagnosis_id}", tags=["patient-diagnosis"])
+async def delete_diagnosis(
+    diagnosis_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Soft delete a diagnosis record"""
+    try:
+        diagnosis = db.query(model.PatientDiagnosis).filter(
+            model.PatientDiagnosis.diagnosis_id == diagnosis_id,
+            model.PatientDiagnosis.is_deleted == False
+        ).first()
+        
+        if not diagnosis:
+            raise HTTPException(status_code=404, detail="Diagnosis not found")
+        
+        # Verify user belongs to the same facility
+        if diagnosis.facility_id != current_user.facility_id:
+            raise HTTPException(status_code=403, detail="You can only access data from your facility")
+        
+        # Soft delete diagnosis
+        diagnosis.is_deleted = True
+        diagnosis.deleted_by = current_user.user_id
+        diagnosis.deleted_at = datetime.now()
+        db.commit()
+        
+        return {
+            "status_code": 200,
+            "message": "Diagnosis deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting diagnosis: {str(e)}")
