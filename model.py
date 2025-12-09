@@ -672,7 +672,9 @@ class PatientReports(Base):
     appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"))
     diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"))
     FILENAME = Column(Text, nullable=False)
+    file_title = Column(String, nullable=True)
     FILE_BLOB = Column(sa.LargeBinary)
+    
 
     # Relationships
     facility = relationship("Facility")

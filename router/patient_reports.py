@@ -50,6 +50,7 @@ class PatientReportCreate(BaseModel):
     appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
     diagnosis_id: Optional[int] = Field(None, description="Associated diagnosis ID")
     filename: str = Field(..., description="Original filename")
+    file_title: Optional[str] = Field(None, description="File title/description")
 
     class Config:
         json_encoders = {
@@ -62,7 +63,8 @@ class PatientReportCreate(BaseModel):
                 "date": "2025-09-15",
                 "appointment_id": 456,
                 "diagnosis_id": 789,
-                "filename": "patient_report_2025_09_15.pdf"
+                "filename": "patient_report_2025_09_15.pdf",
+                "file_title": "Blood Test Results - Annual Checkup"
             }
         }
 
@@ -77,6 +79,7 @@ def report_to_dict(report) -> Dict[str, Any]:
         "appointment_id": report.appointment_id,
         "diagnosis_id": report.diagnosis_id,
         "filename": report.FILENAME,
+        "file_title": getattr(report, 'file_title', None),
         "file_size": len(report.FILE_BLOB) if report.FILE_BLOB else 0
     }
 
@@ -126,6 +129,7 @@ async def upload_patient_report(
     report_date: Date = Form(..., description="Report date (mandatory)"),
     appointment_id: Optional[int] = Form(None, description="Associated appointment ID (optional)"),
     diagnosis_id: Optional[int] = Form(None, description="Associated diagnosis ID (optional)"),
+    file_titles: Optional[List[str]] = Form(None, description="File titles/descriptions (optional, one per file)"),
     files: List[UploadFile] = File(..., description="Binary files to upload (mandatory)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -138,11 +142,12 @@ async def upload_patient_report(
     - facility_id: ID of the facility (required)
     - patient_id: ID of the patient (required)
     - report_date: Date of the report (required)
-    - file: Binary file to upload (required)
+    - files: Binary files to upload (required)
     
     Optional fields:
     - appointment_id: Associated appointment ID
     - diagnosis_id: Associated diagnosis ID
+    - file_titles: List of titles/descriptions for each file (optional)
     
     Returns: JSON object with success message and created record
     """
@@ -246,8 +251,13 @@ async def upload_patient_report(
         uploaded_reports = []
         
         # Process each file
-        for filename, file_content in file_contents:
+        for idx, (filename, file_content) in enumerate(file_contents):
             try:
+                # Get file title if provided
+                file_title = None
+                if file_titles and idx < len(file_titles):
+                    file_title = file_titles[idx]
+                
                 # Create new patient report record for each file
                 new_report = model.PatientReports(
                     facility_id=facility_id,
@@ -256,7 +266,8 @@ async def upload_patient_report(
                     appointment_id=appointment_id,
                     diagnosis_id=diagnosis_id,
                     FILENAME=filename,
-                    FILE_BLOB=file_content
+                    FILE_BLOB=file_content,
+                    file_title=file_title
                 )
                 
                 db.add(new_report)

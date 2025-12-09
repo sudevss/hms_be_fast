@@ -940,6 +940,29 @@ async def get_templates(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching templates: {str(e)}")
 
+@router.get("/all/list", tags=["Templates"])
+async def get_all_templates(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all templates regardless of active status"""
+    try:
+        templates = db.query(model.Template).filter(
+            model.Template.facility_id == current_user.facility_id,
+            model.Template.is_deleted == False
+        ).order_by(model.Template.template_name).all()
+        
+        return [{
+            "template_id": t.template_id,
+            "facility_id": t.facility_id,
+            "template_name": t.template_name,
+            "template_type": t.template_type,
+            "description": t.description,
+            "is_active": t.is_active
+        } for t in templates]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching templates: {str(e)}")
+
 @router.get("/{template_id}", tags=["Templates"])
 async def get_template_details(
     template_id: int,
