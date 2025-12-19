@@ -543,7 +543,7 @@ class ScheduleCreate(BaseModel):
             return None
         
         if not v:
-            return None
+            return []
         
         filtered = []
         for leave in v:
@@ -554,7 +554,7 @@ class ScheduleCreate(BaseModel):
                     continue
             filtered.append(leave)
         
-        return filtered if filtered else None
+        return filtered
     
     @validator('leavePeriods')
     def validate_no_overlapping_leaves(cls, v):

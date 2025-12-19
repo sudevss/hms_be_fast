@@ -213,6 +213,7 @@ async def load_template(
             joinedload(model.Template.lab_tests).joinedload(model.LabTemplate.test)
         ).filter(
             model.Template.template_id == request.template_id,
+            model.Template.facility_id == current_user.facility_id,
             model.Template.is_active == True,
             model.Template.is_deleted == False
         ).first()
