@@ -261,11 +261,25 @@ def group_schedules_by_time(schedules):
     
     return result
 
+def get_effective_facility_id(current_user: CurrentUser, facility_id: Optional[int]) -> int:
+    """
+    Determine the effective facility_id based on user role
+    - Super Admin: Use provided facility_id parameter
+    - Regular User: Always use facility_id from token
+    """
+    if current_user.is_super_admin():
+        if facility_id is None:
+            raise HTTPException(status_code=400, detail="facility_id is required")
+        return facility_id
+    else:
+        # Regular user - always use facility_id from token, ignore parameter
+        return current_user.facility_id
+
 # API Routes
 @router.get("/", tags=["doctors"], response_model=List[doctor_response])
 async def get_all_doctors(
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID to filter doctors"),
+    facility_id: Optional[int] = Query(None, description="Facility ID to filter doctors"),
     include_inactive: Optional[bool] = False,
     db: Session = Depends(get_db)
 ):
@@ -276,12 +290,8 @@ async def get_all_doctors(
     - Deleted doctors are never returned
     """
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only access doctors from your facility."
-            )
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         query = db.query(model.Doctors).options(joinedload(model.Doctors.doctor_schedules))
         
@@ -292,7 +302,7 @@ async def get_all_doctors(
         if not include_inactive:
             query = query.filter(model.Doctors.is_active == True)
             
-        query = query.filter(model.Doctors.facility_id == facility_id)
+        query = query.filter(model.Doctors.facility_id == effective_facility_id)
             
         doctors = query.all()
 
@@ -332,22 +342,18 @@ async def get_all_doctors(
 async def get_doctor_by_id(
     doctor_id: int,
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
     """Get doctor by ID (only if not soft deleted)"""
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only access doctors from your facility."
-            )
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         doctor = (
             db.query(model.Doctors)
             .filter(model.Doctors.id == doctor_id)
-            .filter(model.Doctors.facility_id == facility_id)
+            .filter(model.Doctors.facility_id == effective_facility_id)
             .filter(model.Doctors.is_deleted == False)  # Filter out soft deleted doctors
             .options(joinedload(model.Doctors.doctor_schedules), joinedload(model.Doctors.facility))
             .first()
@@ -410,12 +416,9 @@ async def add_new_doctor(
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != doctor.facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only add doctors to your facility."
-            )
+        # For regular users, override facility_id with token facility_id
+        if not current_user.is_super_admin():
+            doctor.facility_id = current_user.facility_id
         
         if doctor.facility_id:
             facility = db.query(model.Facility).filter(model.Facility.facility_id == doctor.facility_id).first()
@@ -454,20 +457,16 @@ async def edit_doctor_details(
     doctor_id: int,
     doctor: ui_DoctorsUpdate,
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only update doctors from your facility."
-            )
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         existing_doctor = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
-            model.Doctors.facility_id == facility_id,
+            model.Doctors.facility_id == effective_facility_id,
             model.Doctors.is_deleted == False  # Only allow updates for non-deleted doctors
         ).first()
         
@@ -501,18 +500,15 @@ async def edit_doctor_details(
         # Validate facility_id only if it's provided in request body
         if "facility_id" in filtered_data:
             facility_id_update = filtered_data.get("facility_id")
-            if facility_id_update:
+            # For regular users, prevent facility_id changes
+            if not current_user.is_super_admin():
+                filtered_data.pop("facility_id")
+            elif facility_id_update:
                 facility = db.query(model.Facility).filter(
                     model.Facility.facility_id == facility_id_update
                 ).first()
                 if not facility:
                     raise HTTPException(status_code=400, detail="Facility not found")
-                # Verify user has access to the new facility as well
-                if not current_user.is_super_admin() and current_user.facility_id != facility_id_update:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Access denied. You can only assign doctors to your facility."
-                    )
             else:
                 # If facility_id is None or falsy (0), remove it to avoid overwriting
                 filtered_data.pop("facility_id")
@@ -560,21 +556,17 @@ async def edit_doctor_details(
 async def delete_doctor_details(
     doctor_id: int,
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
     """Soft delete doctor by setting is_deleted=True"""
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only delete doctors from your facility."
-            )
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         req_doc = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
-            model.Doctors.facility_id == facility_id,
+            model.Doctors.facility_id == effective_facility_id,
             model.Doctors.is_deleted == False  # Only allow deletion of non-deleted doctors
         ).first()
         
@@ -599,21 +591,17 @@ async def delete_doctor_details(
 async def restore_doctor(
     doctor_id: int,
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
     """Restore a soft deleted doctor"""
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only restore doctors from your facility."
-            )
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         doctor = db.query(model.Doctors).filter(
             model.Doctors.id == doctor_id,
-            model.Doctors.facility_id == facility_id,
+            model.Doctors.facility_id == effective_facility_id,
             model.Doctors.is_deleted == True  # Only restore deleted doctors
         ).first()
         
