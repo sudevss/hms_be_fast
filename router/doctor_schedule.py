@@ -1,6 +1,6 @@
 from datetime import date, time, timedelta
 from typing import List, Dict, Optional, Any, Tuple
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, validator
 import logging
@@ -20,6 +20,55 @@ router = APIRouter(prefix="/doctor-schedule", tags=["Doctor Schedule"])
 
 
 # ---------------- Helper Functions ----------------
+
+def get_effective_facility_id(current_user: CurrentUser, requested_facility_id: Optional[int] = None) -> int:
+    """
+    Determine which facility_id to use based on user role.
+    
+    For Super Admins: Use the requested_facility_id parameter if provided, otherwise use token facility_id
+    For Regular Users: Always use facility_id from token (ignore parameter)
+    
+    Args:
+        current_user: Current user from token
+        requested_facility_id: facility_id passed as parameter (optional)
+        
+    Returns:
+        The effective facility_id to use for the query
+    """
+    # Check if user is super admin (adjust the role check based on your actual role field)
+    is_super_admin = getattr(current_user, 'role', None) == 'super_admin' or \
+                     getattr(current_user, 'is_superuser', False) or \
+                     getattr(current_user, 'role', None) == 'admin'
+    
+    # Get facility_id from token
+    token_facility_id = getattr(current_user, 'facility_id', None)
+    
+    if token_facility_id is None:
+        logger.error(f"User {getattr(current_user, 'user_id', 'unknown')} has no facility_id in token")
+        raise HTTPException(
+            status_code=403, 
+            detail="User does not have facility_id in token"
+        )
+    
+    if is_super_admin:
+        # Super admin can use the requested facility_id if provided, otherwise use token facility_id
+        if requested_facility_id is not None:
+            logger.info(f"Super admin accessing facility_id: {requested_facility_id}")
+            return requested_facility_id
+        else:
+            logger.info(f"Super admin accessing their own facility_id: {token_facility_id}")
+            return token_facility_id
+    else:
+        # Regular user must use facility_id from token
+        if requested_facility_id is not None and requested_facility_id != token_facility_id:
+            logger.warning(
+                f"Regular user attempted to access facility_id {requested_facility_id} "
+                f"but token has facility_id {token_facility_id}. Using token facility_id."
+            )
+        
+        logger.info(f"Regular user accessing their facility_id: {token_facility_id}")
+        return token_facility_id
+
 
 def get_existing_leave_periods(db: Session, facility_id: int, doctor_id: int) -> List[Tuple[date, date]]:
     """
@@ -688,7 +737,10 @@ async def create_schedule(
 ):
     """Create new schedules with overlap handling and honor multiple leave periods."""
     try:
-        old_leave_periods = get_existing_leave_periods(db, schedule.facility_id, schedule.doctor_id)
+        # Use facility_id from token for regular users, allow parameter for super admins
+        effective_facility_id = get_effective_facility_id(current_user, schedule.facility_id)
+        
+        old_leave_periods = get_existing_leave_periods(db, effective_facility_id, schedule.doctor_id)
         
         new_leave_periods = [(lp.leaveStartDate, lp.leaveEndDate) for lp in schedule.leavePeriods] if schedule.leavePeriods is not None else None
         
@@ -747,28 +799,28 @@ async def create_schedule(
                 dates_to_restore.append((range_start, range_end))
         
         for restore_start, restore_end in dates_to_restore:
-            restore_schedules_for_dates(db, schedule.facility_id, schedule.doctor_id, 
+            restore_schedules_for_dates(db, effective_facility_id, schedule.doctor_id, 
                                       restore_start, restore_end)
             db.flush()
         
         if dates_to_restore:
-            merge_adjacent_schedules(db, schedule.facility_id, schedule.doctor_id)
+            merge_adjacent_schedules(db, effective_facility_id, schedule.doctor_id)
             db.flush()
         
         if not has_schedule_data:
             if new_leave_periods is not None:
-                sync_leave_periods_to_db(db, schedule.facility_id, schedule.doctor_id, new_leave_periods)
+                sync_leave_periods_to_db(db, effective_facility_id, schedule.doctor_id, new_leave_periods)
                 
                 if new_leave_periods:
                     delete_schedules_in_leave_periods(
                         db,
-                        schedule.facility_id,
+                        effective_facility_id,
                         schedule.doctor_id,
                         new_leave_periods
                     )
                     db.flush()
                     
-                    merge_adjacent_schedules(db, schedule.facility_id, schedule.doctor_id)
+                    merge_adjacent_schedules(db, effective_facility_id, schedule.doctor_id)
                     db.flush()
             
             db.commit()
@@ -777,7 +829,7 @@ async def create_schedule(
             original_payload = {
                 "startDate": str(schedule.startDate),
                 "endDate": str(schedule.endDate),
-                "facility_id": schedule.facility_id,
+                "facility_id": effective_facility_id,
                 "doctor_id": schedule.doctor_id,
                 "leavePeriods": [
                     {
@@ -811,18 +863,18 @@ async def create_schedule(
             }
         
         if schedule.leavePeriods is not None:
-            sync_leave_periods_to_db(db, schedule.facility_id, schedule.doctor_id, effective_leave_periods)
+            sync_leave_periods_to_db(db, effective_facility_id, schedule.doctor_id, effective_leave_periods)
         
         if effective_leave_periods:
             delete_schedules_in_leave_periods(
                 db,
-                schedule.facility_id,
+                effective_facility_id,
                 schedule.doctor_id,
                 effective_leave_periods
             )
             db.flush()
             
-            merge_adjacent_schedules(db, schedule.facility_id, schedule.doctor_id)
+            merge_adjacent_schedules(db, effective_facility_id, schedule.doctor_id)
             db.flush()
         
         created_schedules: List[Dict[str, Any]] = []
@@ -865,7 +917,7 @@ async def create_schedule(
                     for seg_start, seg_end in segments:
                         handle_schedule_overlap(
                             db,
-                            schedule.facility_id,
+                            effective_facility_id,
                             schedule.doctor_id,
                             seg_start,
                             seg_end,
@@ -876,7 +928,7 @@ async def create_schedule(
                         total_slots = slot.totalSlots if slot.totalSlots and slot.totalSlots.strip() else None
 
                         new_schedule = model.DoctorSchedule(
-                            facility_id=schedule.facility_id,
+                            facility_id=effective_facility_id,
                             doctor_id=schedule.doctor_id,
                             start_date=seg_start,
                             end_date=seg_end,
@@ -915,7 +967,7 @@ async def create_schedule(
         original_payload = {
             "startDate": str(schedule.startDate),
             "endDate": str(schedule.endDate),
-            "facility_id": schedule.facility_id,
+            "facility_id": effective_facility_id,
             "doctor_id": schedule.doctor_id,
             "leavePeriods": [
                 {
@@ -956,17 +1008,20 @@ async def create_schedule(
         raise HTTPException(status_code=500, detail=f"Error creating schedule: {str(e)}")
 
 
-@router.get("/{facility_id}/{doctor_id}", response_model=Dict)
+@router.get("/{doctor_id}", response_model=Dict)
 async def get_schedules(
-    facility_id: int, 
-    doctor_id: int, 
+    doctor_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional - uses token facility_id if not provided)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get schedules for a doctor in a facility in the same payload format as create"""
+    """Get schedules for a doctor. facility_id is optional - if not provided, uses the facility_id from the user's token."""
     try:
+        # Use facility_id from token if not provided, or validate access if provided
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.facility_id == effective_facility_id,
             model.DoctorSchedule.doctor_id == doctor_id,
             model.DoctorSchedule.availability_flag == 'A'
         ).order_by(
@@ -983,7 +1038,7 @@ async def get_schedules(
         overall_end = max(s.end_date for s in schedules)
 
         leave_periods_list = []
-        leave_records = get_existing_leave_periods(db, facility_id, doctor_id)
+        leave_records = get_existing_leave_periods(db, effective_facility_id, doctor_id)
         
         for leave_start, leave_end in leave_records:
             leave_periods_list.append({
@@ -1030,7 +1085,7 @@ async def get_schedules(
         payload = {
             "startDate": str(overall_start),
             "endDate": str(overall_end),
-            "facility_id": facility_id,
+            "facility_id": effective_facility_id,
             "doctor_id": doctor_id,
             "leavePeriods": leave_periods_list,
             "weekDaysList": weekdays_list
@@ -1045,19 +1100,22 @@ async def get_schedules(
         raise HTTPException(status_code=500, detail=f"Error getting schedules: {str(e)}")
 
 
-@router.delete("/{facility_id}/{doctor_id}/{week_day}/{window_num}", response_model=Dict)
+@router.delete("/{doctor_id}/{week_day}/{window_num}", response_model=Dict)
 async def delete_schedule(
-    facility_id: int, 
     doctor_id: int,
     week_day: str,
-    window_num: int, 
+    window_num: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional - uses token facility_id if not provided)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete all schedules for a specific weekday and window"""
+    """Delete all schedules for a specific weekday and window. facility_id is optional - if not provided, uses the facility_id from the user's token."""
     try:
+        # Use facility_id from token if not provided, or validate access if provided
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         deleted_count = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.facility_id == effective_facility_id,
             model.DoctorSchedule.doctor_id == doctor_id,
             model.DoctorSchedule.week_day == week_day,
             model.DoctorSchedule.window_num == window_num,
@@ -1082,22 +1140,25 @@ async def delete_schedule(
         raise HTTPException(status_code=500, detail=f"Error deleting schedule: {str(e)}")
 
 
-@router.get("/availability/{facility_id}/{doctor_id}/{start_date}/{end_date}", response_model=AvailabilityResponse)
+@router.get("/availability/{doctor_id}/{start_date}/{end_date}", response_model=AvailabilityResponse)
 async def check_doctor_availability(
-    facility_id: int, 
     doctor_id: int, 
     start_date: date, 
-    end_date: date, 
+    end_date: date,
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional - uses token facility_id if not provided)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Check doctor availability between start_date and end_date"""
+    """Check doctor availability between start_date and end_date. facility_id is optional - if not provided, uses the facility_id from the user's token."""
     try:
+        # Use facility_id from token if not provided, or validate access if provided
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         if end_date < start_date:
             raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
         schedules = db.query(model.DoctorSchedule).filter(
-            model.DoctorSchedule.facility_id == facility_id,
+            model.DoctorSchedule.facility_id == effective_facility_id,
             model.DoctorSchedule.doctor_id == doctor_id,
             model.DoctorSchedule.availability_flag == 'A',
             model.DoctorSchedule.end_date >= start_date,
@@ -1108,7 +1169,7 @@ async def check_doctor_availability(
             model.DoctorSchedule.slot_start_time
         ).all()
 
-        leave_periods = get_existing_leave_periods(db, facility_id, doctor_id)
+        leave_periods = get_existing_leave_periods(db, effective_facility_id, doctor_id)
 
         availability_details = []
 
@@ -1151,7 +1212,7 @@ async def check_doctor_availability(
             current_date += timedelta(days=1)
 
         return AvailabilityResponse(
-            facility_id=facility_id,
+            facility_id=effective_facility_id,
             doctor_id=doctor_id,
             start_date=start_date,
             end_date=end_date,

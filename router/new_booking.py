@@ -20,6 +20,17 @@ The appointmentTime field should be provided either in 24-hour HH:MM (or HH:MM:S
 
 # -------------------- Helper Functions --------------------
 
+def get_effective_facility_id(current_user: CurrentUser, requested_facility_id: Optional[int]) -> int:
+    """
+    Determine the effective facility_id based on user role.
+    - Super Admin: Use requested_facility_id if provided, otherwise use token facility_id
+    - Regular User: Always use token facility_id (ignore requested_facility_id)
+    """
+    if current_user.role == "Super Admin":
+        return requested_facility_id if requested_facility_id is not None else current_user.facility_id
+    else:
+        return current_user.facility_id
+
 def parse_time_string(v) -> time:
     """
     Parse time input into datetime.time.
@@ -91,7 +102,6 @@ def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int
         ).all()
         
         if not doctor_schedules:
-            # FIX: Return 3 values instead of 2
             return False, f"Doctor {doctor_id} is not scheduled to work on {day_of_week}s at facility {facility_id} for the date {appointment_date}", None
         
         available_windows = []
@@ -114,20 +124,17 @@ def check_doctor_schedule_enhanced(db: Session, doctor_id: int, facility_id: int
             available_windows.append(f"Window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
             
             if start_time <= appointment_time < end_time:
-                # Return the slot duration for this schedule window
                 return True, f"Doctor is available in schedule window {schedule.window_num}: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}", schedule.slot_duration_minutes
         
         return False, f"Doctor {doctor_id} not available at {appointment_time.strftime('%H:%M')} on {day_of_week} at facility {facility_id}. Available windows: {', '.join(available_windows)}", None
         
     except Exception as e:
-        # FIX: Return 3 values instead of 2
         return False, f"Error checking doctor schedule: {str(e)}", None
 
 def find_or_create_available_slot(db, doctor_id, facility_id, appointment_date, appointment_time, slot_duration_minutes=15):
     """Updated to use dynamic slot duration"""
     try:
         slot_start_time = appointment_time
-        # Use the slot_duration_minutes parameter instead of hardcoded 15
         slot_end_time = (datetime.combine(date.today(), appointment_time) + timedelta(minutes=slot_duration_minutes)).time()
 
         # Check for exact match first
@@ -205,9 +212,6 @@ def validate_appointment_constraints(db: Session, patient_id: int, doctor_id: in
         
         if overlapping:
             return False, "Patient already has an appointment at this time"
-        
-        # Removed the daily appointment limit check
-        # Now patients can book unlimited appointments per day
         
         return True, "Validation passed"
         
@@ -461,9 +465,12 @@ def dashboard_book_appointment(
 ):
     """Enhanced Dashboard API: Books appointment with proper validation flow (Requires Authentication)"""
     try:
+        # Determine effective facility_id based on user role
+        facility_id = get_effective_facility_id(current_user, booking_data.facility_id)
+        
         # Get schedule validation with slot duration
         schedule_valid, schedule_message, slot_duration = check_doctor_schedule_enhanced(
-            db, booking_data.doctor_id, booking_data.facility_id, 
+            db, booking_data.doctor_id, facility_id, 
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -474,9 +481,9 @@ def dashboard_book_appointment(
         slot_duration_minutes = slot_duration if slot_duration else 15
         
         slot_dcid, error_message = find_or_create_available_slot(
-            db, booking_data.doctor_id, booking_data.facility_id,
+            db, booking_data.doctor_id, facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime,
-            slot_duration_minutes  # Pass the dynamic slot duration
+            slot_duration_minutes
         )
         
         if not slot_dcid:
@@ -484,7 +491,6 @@ def dashboard_book_appointment(
         
         
         phone_number = booking_data.patient_info.contact_number
-        facility_id = booking_data.facility_id
         
         # Always create new patient - allow multiple patients with same phone number
         is_new_patient = True
@@ -598,27 +604,28 @@ def dashboard_book_appointment(
 @router.get("/lookup", response_model=PatientLookupResponse)
 def dashboard_patient_lookup(
     phone_number: str = Query(..., description="Patient phone number"),
-    facility_id: Optional[int] = Query(None, alias="facility_id", description="Filter by specific facility"),
+    facility_id: Optional[int] = Query(None, alias="facility_id", description="Filter by specific facility (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Lookup ALL patients registered with the same phone number (Requires Authentication)"""
     try:
+        # Determine effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         clean_phone = re.sub(r'[^\d]', '', phone_number)
         if len(clean_phone) != 10:
             raise HTTPException(400, "Invalid phone number format. Must be 10 digits.")
         
-        query = db.query(model.Patients).filter(model.Patients.contact_number == clean_phone)
-        if facility_id:
-            query = query.filter(model.Patients.facility_id == facility_id)
+        query = db.query(model.Patients).filter(
+            model.Patients.contact_number == clean_phone,
+            model.Patients.facility_id == effective_facility_id
+        )
         
-        patients = query.order_by(model.Patients.facility_id, model.Patients.firstname, model.Patients.lastname).all()
+        patients = query.order_by(model.Patients.firstname, model.Patients.lastname).all()
         
         if not patients:
-            msg = f"No patients found with phone number {clean_phone}"
-            if facility_id:
-                msg += f" in facility {facility_id}"
-            msg += ". New patient will be created when booking."
+            msg = f"No patients found with phone number {clean_phone} in facility {effective_facility_id}. New patient will be created when booking."
             return PatientLookupResponse(exists=False, total_patients=0, patients=[], message=msg)
         
         patient_details_list = []
@@ -686,17 +693,7 @@ def dashboard_patient_lookup(
         total = len(patients)
         total_all_appointments = sum(len(p.recent_appointments) for p in patient_details_list)
         
-        message = f"Found {total} {'patient' if total == 1 else 'patients'} with phone number {clean_phone}"
-        
-        if facility_id:
-            message += f" in facility {facility_id}"
-        else:
-            counts = {}
-            for p in patients:
-                counts[p.facility_id] = counts.get(p.facility_id, 0) + 1
-            if len(counts) > 1:
-                parts = [f"{cnt} in facility {fid}" for fid, cnt in counts.items()]
-                message += f" across facilities ({', '.join(parts)})"
+        message = f"Found {total} {'patient' if total == 1 else 'patients'} with phone number {clean_phone} in facility {effective_facility_id}"
         
         if total_all_appointments > 0:
             message += f". Total recent appointments: {total_all_appointments} (including cancelled/completed)"
@@ -723,9 +720,12 @@ def book_appointment_for_existing_patient(
 ):
     """Enhanced Quick booking for existing patients using patient_id (Requires Authentication)"""
     try:
+        # Determine effective facility_id based on user role
+        facility_id = get_effective_facility_id(current_user, booking_data.facility_id)
+        
         # Get schedule validation with slot duration
         schedule_valid, schedule_message, slot_duration = check_doctor_schedule_enhanced(
-            db, booking_data.doctor_id, booking_data.facility_id,
+            db, booking_data.doctor_id, facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -736,26 +736,24 @@ def book_appointment_for_existing_patient(
         slot_duration_minutes = slot_duration if slot_duration else 15
         
         slot_dcid, error_message = find_or_create_available_slot(
-            db, booking_data.doctor_id, booking_data.facility_id,
+            db, booking_data.doctor_id, facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime,
-            slot_duration_minutes  # Pass the dynamic slot duration
+            slot_duration_minutes
         )
         
         if not slot_dcid:
             raise HTTPException(400, f"Booking validation failed: {error_message}")
         
-        # ... rest of the function remains the same ...
-        
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == booking_data.patient_id,
-            model.Patients.facility_id == booking_data.facility_id
+            model.Patients.facility_id == facility_id
         ).first()
         
         if not existing_patient:
-            raise HTTPException(404, f"Patient with ID {booking_data.patient_id} not found in facility {booking_data.facility_id}")
+            raise HTTPException(404, f"Patient with ID {booking_data.patient_id} not found in facility {facility_id}")
         
         is_valid, validation_error = validate_appointment_constraints(
-            db, booking_data.patient_id, booking_data.doctor_id, booking_data.facility_id,
+            db, booking_data.patient_id, booking_data.doctor_id, facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime
         )
         
@@ -787,7 +785,7 @@ def book_appointment_for_existing_patient(
         new_appointment = model.Appointment(
             patient_id=booking_data.patient_id,
             doctor_id=booking_data.doctor_id,
-            facility_id=booking_data.facility_id,
+            facility_id=facility_id,
             DCID=slot_dcid,
             AppointmentDate=booking_data.AppointmentDate,
             AppointmentTime=booking_data.AppointmentTime,

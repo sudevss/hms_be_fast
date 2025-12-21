@@ -22,6 +22,19 @@ def get_db():
     finally:
         db.close()
 
+# ==================== HELPER FUNCTIONS ====================
+
+def get_effective_facility_id(current_user: CurrentUser, requested_facility_id: Optional[int] = None) -> int:
+    """
+    Determine the effective facility_id based on user role.
+    - Super Admin: Can use requested_facility_id if provided, otherwise use token facility_id
+    - Regular User: Always use token facility_id (ignore requested_facility_id)
+    """
+    if current_user.is_super_admin:
+        return requested_facility_id if requested_facility_id is not None else current_user.facility_id
+    else:
+        return current_user.facility_id
+
 # ==================== PYDANTIC MODELS ====================
 
 class DiagnosisSymptomItem(BaseModel):
@@ -49,7 +62,7 @@ class DiagnosisProcedureItem(BaseModel):
 class PatientDiagnosisCreate(BaseModel):
     """Request model for creating/updating patient diagnosis"""
     diagnosis_id: Optional[int] = Field(None, description="Diagnosis ID for update, null for create")
-    facility_id: int = Field(..., description="Facility ID where diagnosis was made")
+    facility_id: Optional[int] = Field(None, description="Facility ID where diagnosis was made (optional, uses token facility_id if not provided)")
     patient_id: int = Field(..., description="Patient ID")
     diagnosis_date: date = Field(..., description="Diagnosis date")
     appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
@@ -76,7 +89,7 @@ class PatientDiagnosisCreate(BaseModel):
     lab_tests: List[DiagnosisLabTestItem] = Field(default=[], description="List of lab tests")
     procedures: List[DiagnosisProcedureItem] = Field(default=[], description="List of procedures")
 
-    @field_validator('appointment_id', 'diagnosis_id', 'template_id')
+    @field_validator('appointment_id', 'diagnosis_id', 'template_id', 'facility_id')
     @classmethod
     def validate_optional_ids(cls, v):
         if v == 0:
@@ -90,7 +103,7 @@ class PatientDiagnosisCreate(BaseModel):
         json_schema_extra = {
             "example": {
                 "diagnosis_id": None,
-                "facility_id": 0,
+                "facility_id": None,
                 "patient_id": 0,
                 "diagnosis_date": "2025-11-29",
                 "appointment_id": None,
@@ -207,13 +220,16 @@ async def load_template(
     Doctor can then modify before saving.
     """
     try:
+        # Use facility_id from token
+        effective_facility_id = current_user.facility_id
+        
         template = db.query(model.Template).options(
             joinedload(model.Template.symptoms).joinedload(model.SymptomTemplate.symptom),
             joinedload(model.Template.prescriptions).joinedload(model.PrescriptionTemplate.medicine),
             joinedload(model.Template.lab_tests).joinedload(model.LabTemplate.test)
         ).filter(
             model.Template.template_id == request.template_id,
-            model.Template.facility_id == current_user.facility_id,
+            model.Template.facility_id == effective_facility_id,
             model.Template.is_active == True,
             model.Template.is_deleted == False
         ).first()
@@ -276,15 +292,18 @@ async def create_or_update_patient_diagnosis(
     - Prescriptions
     - Lab tests
     - Procedures
+    
+    facility_id behavior:
+    - Regular users: Always uses token facility_id (ignores provided facility_id)
+    - Super admin: Uses provided facility_id if given, otherwise uses token facility_id
     """
     try:
-        # Verify user belongs to the same facility
-        if diagnosis_data.facility_id != current_user.facility_id:
-            raise HTTPException(status_code=403, detail="You can only access data from your facility")
+        # Determine effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, diagnosis_data.facility_id)
         
         # Validate facility
         facility = db.query(model.Facility).filter(
-            model.Facility.facility_id == diagnosis_data.facility_id
+            model.Facility.facility_id == effective_facility_id
         ).first()
         if not facility:
             raise HTTPException(status_code=400, detail="Facility not found")
@@ -337,8 +356,12 @@ async def create_or_update_patient_diagnosis(
             if not existing_diagnosis:
                 raise HTTPException(status_code=404, detail="Diagnosis record not found")
             
+            # Super admin can access any facility, regular users only their own
+            if not current_user.is_super_admin and existing_diagnosis.facility_id != current_user.facility_id:
+                raise HTTPException(status_code=403, detail="You can only update data from your facility")
+            
             # Update basic fields
-            existing_diagnosis.facility_id = diagnosis_data.facility_id
+            existing_diagnosis.facility_id = effective_facility_id
             existing_diagnosis.patient_id = diagnosis_data.patient_id
             existing_diagnosis.date = diagnosis_data.diagnosis_date
             existing_diagnosis.appointment_id = diagnosis_data.appointment_id
@@ -375,7 +398,7 @@ async def create_or_update_patient_diagnosis(
         else:
             # CREATE NEW DIAGNOSIS
             new_diagnosis = model.PatientDiagnosis(
-                facility_id=diagnosis_data.facility_id,
+                facility_id=effective_facility_id,
                 patient_id=diagnosis_data.patient_id,
                 date=diagnosis_data.diagnosis_date,
                 appointment_id=diagnosis_data.appointment_id,
@@ -401,7 +424,7 @@ async def create_or_update_patient_diagnosis(
         # Add symptoms
         for symptom_item in diagnosis_data.symptoms:
             diagnosis_symptom = model.DiagnosisSymptoms(
-                facility_id=diagnosis_data.facility_id,
+                facility_id=effective_facility_id,
                 diagnosis_id=diagnosis_id,
                 symptom_id=symptom_item.symptom_id,
                 duration_days=symptom_item.duration_days,
@@ -413,7 +436,7 @@ async def create_or_update_patient_diagnosis(
         # Add prescriptions
         for prescription_item in diagnosis_data.prescriptions:
             diagnosis_prescription = model.DiagnosisPrescription(
-                facility_id=diagnosis_data.facility_id,
+                facility_id=effective_facility_id,
                 diagnosis_id=diagnosis_id,
                 medicine_id=prescription_item.medicine_id,
                 morning_dosage=prescription_item.morning_dosage,
@@ -429,7 +452,7 @@ async def create_or_update_patient_diagnosis(
         # Add lab tests
         for lab_test_item in diagnosis_data.lab_tests:
             diagnosis_lab_test = model.DiagnosisLabTests(
-                facility_id=diagnosis_data.facility_id,
+                facility_id=effective_facility_id,
                 diagnosis_id=diagnosis_id,
                 test_id=lab_test_item.test_id,
                 prerequisite_text=lab_test_item.prerequisite_text,
@@ -440,7 +463,7 @@ async def create_or_update_patient_diagnosis(
         # Add procedures
         for procedure_item in diagnosis_data.procedures:
             diagnosis_procedure = model.DiagnosisProcedures(
-                facility_id=diagnosis_data.facility_id,
+                facility_id=effective_facility_id,
                 diagnosis_id=diagnosis_id,
                 procedure_text=procedure_item.procedure_text,
                 price=procedure_item.price,
@@ -472,8 +495,8 @@ async def create_or_update_patient_diagnosis(
 
 @router.get("/", tags=["patient-diagnosis"])
 async def get_patient_diagnosis(
-    facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional for super admin)"),
     doctor_id: Optional[int] = Query(None, description="Doctor ID (optional)"),
     diagnosis_date: Optional[date] = Query(None, description="Diagnosis date (optional)"),
     from_date: Optional[date] = Query(None, description="From date for range query"),
@@ -485,13 +508,12 @@ async def get_patient_diagnosis(
     """
     Get patient diagnoses with filtering.
     
-    Mandatory: facility_id, patient_id
-    Optional: doctor_id, diagnosis_date, date range, include_details
+    Mandatory: patient_id
+    Optional: facility_id (super admin only), doctor_id, diagnosis_date, date range, include_details
     """
     try:
-        # Verify user belongs to the same facility
-        if facility_id != current_user.facility_id:
-            raise HTTPException(status_code=403, detail="You can only access data from your facility")
+        # Determine effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         # Build query with eager loading if details requested
         if include_details:
@@ -507,7 +529,7 @@ async def get_patient_diagnosis(
         # Apply mandatory filters
         query = query.filter(
             and_(
-                model.PatientDiagnosis.facility_id == facility_id,
+                model.PatientDiagnosis.facility_id == effective_facility_id,
                 model.PatientDiagnosis.patient_id == patient_id,
                 model.PatientDiagnosis.is_deleted == False
             )
@@ -563,8 +585,8 @@ async def get_diagnosis_by_id(
         if not diagnosis:
             raise HTTPException(status_code=404, detail="Diagnosis not found")
         
-        # Verify user belongs to the same facility
-        if diagnosis.facility_id != current_user.facility_id:
+        # Super admin can access any facility, regular users only their own
+        if not current_user.is_super_admin and diagnosis.facility_id != current_user.facility_id:
             raise HTTPException(status_code=403, detail="You can only access data from your facility")
         
         return diagnosis_to_dict(diagnosis, include_details=True)
@@ -590,8 +612,8 @@ async def delete_diagnosis(
         if not diagnosis:
             raise HTTPException(status_code=404, detail="Diagnosis not found")
         
-        # Verify user belongs to the same facility
-        if diagnosis.facility_id != current_user.facility_id:
+        # Super admin can access any facility, regular users only their own
+        if not current_user.is_super_admin and diagnosis.facility_id != current_user.facility_id:
             raise HTTPException(status_code=403, detail="You can only access data from your facility")
         
         # Soft delete diagnosis

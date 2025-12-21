@@ -80,7 +80,7 @@ def get_db():
 
 router = APIRouter(
     prefix="/patients",
-    tags=["patients"],  # Add this line
+    tags=["patients"],
     responses={404: {"description": "Not found"}}
 )
 
@@ -133,23 +133,35 @@ class CreateOrder(BaseModel):
 class VerifyOrder(BaseModel):
     order_id: str
 
+def get_effective_facility_id(current_user: CurrentUser, facility_id: Optional[int]) -> int:
+    """
+    Helper function to determine the effective facility_id based on user type.
+    - Super admins: use the provided facility_id parameter
+    - Regular users: always use facility_id from token
+    """
+    if current_user.is_super_admin():
+        if facility_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Super admin must provide facility_id parameter"
+            )
+        return facility_id
+    else:
+        return current_user.facility_id
+
 @router.get("/", tags=["patients"])
 async def get_all_patients(
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID to filter patients"), 
+    facility_id: Optional[int] = Query(None, description="Facility ID to filter patients"), 
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only access patients from your facility."
-            )
+        # Get effective facility_id based on user type
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         # Get all patients for the facility
         patients = db.query(model.Patients).filter(
-            model.Patients.facility_id == facility_id
+            model.Patients.facility_id == effective_facility_id
         ).all()
         
         result = []
@@ -207,20 +219,16 @@ async def get_all_patients(
 async def get_patient_byid(
     patient_id: int,
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID"), 
+    facility_id: Optional[int] = Query(None, description="Facility ID"), 
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only access patients from your facility."
-            )
+        # Get effective facility_id based on user type
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
-            model.Patients.facility_id == facility_id
+            model.Patients.facility_id == effective_facility_id
         ).first()
         
         if not patient:
@@ -332,12 +340,9 @@ async def add_new_patient(
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != patient.facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only add patients to your facility."
-            )
+        # For regular users, override the facility_id with token facility_id
+        if not current_user.is_super_admin():
+            patient.facility_id = current_user.facility_id
         
         patient_model = model.Patients(
             firstname=patient.firstname,
@@ -374,22 +379,18 @@ async def add_new_patient(
 async def update_patient(
     patient_id: int,
     current_user: CurrentUser = Depends(get_current_user),
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     patient: PatientUpdateSchema = None, 
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only update patients from your facility."
-            )
+        # Get effective facility_id based on user type
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
-            model.Patients.facility_id == facility_id
+            model.Patients.facility_id == effective_facility_id
         ).first()
         
         if not existing_patient:
@@ -497,21 +498,17 @@ async def update_patient(
 async def delete_patient_details(
     current_user: CurrentUser = Depends(get_current_user),
     patient_id: int = Query(..., description="Patient ID"),
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify user has access to this facility
-        if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="Access denied. You can only delete patients from your facility."
-            )
+        # Get effective facility_id based on user type
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
         # Single query to check existence and delete
         deleted_count = db.query(model.Patients).filter(
             model.Patients.id == patient_id,
-            model.Patients.facility_id == facility_id
+            model.Patients.facility_id == effective_facility_id
             
         ).delete()
         

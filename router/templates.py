@@ -21,6 +21,17 @@ def get_db():
     finally:
         db.close()
 
+def get_effective_facility_id(current_user: CurrentUser, facility_id: Optional[int] = None) -> int:
+    """
+    Determine the effective facility_id based on user role.
+    For Super Admins: Use provided facility_id parameter if given, otherwise use token facility_id
+    For Regular Users: Always use facility_id from token (ignore parameter)
+    """
+    if current_user.role == "Super Admin":
+        return facility_id if facility_id is not None else current_user.facility_id
+    else:
+        return current_user.facility_id
+
 # ==================== PYDANTIC MODELS ====================
 
 class SymptomTemplateItem(BaseModel):
@@ -274,7 +285,9 @@ async def create_drug(
 ):
     """Create a new drug/medicine in master data"""
     try:
-        if drug.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, drug.facility_id)
+        
+        if drug.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only create data for your facility")
         
         # Check if drug already exists (not deleted)
@@ -316,13 +329,16 @@ async def get_drugs(
     search: Optional[str] = Query(None, description="Search by medicine or generic name"),
     medicine_type: Optional[str] = Query(None),
     is_active: bool = Query(True),
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get list of drugs with optional filters"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         query = db.query(model.DrugMaster).filter(
-            model.DrugMaster.facility_id == current_user.facility_id,
+            model.DrugMaster.facility_id == effective_facility_id,
             model.DrugMaster.is_active == is_active,
             model.DrugMaster.is_deleted == False
         )
@@ -357,14 +373,17 @@ async def get_drugs(
 @router.delete("/drug-master/{medicine_id}", tags=["Master Data"])
 async def delete_drug(
     medicine_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Soft delete a drug"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         drug = db.query(model.DrugMaster).filter(
             model.DrugMaster.medicine_id == medicine_id,
-            model.DrugMaster.facility_id == current_user.facility_id,
+            model.DrugMaster.facility_id == effective_facility_id,
             model.DrugMaster.is_deleted == False
         ).first()
         
@@ -388,14 +407,17 @@ async def delete_drug(
 async def update_drug(
     medicine_id: int,
     drug_update: DrugMasterUpdate,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update an existing drug/medicine in master data"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         drug = db.query(model.DrugMaster).filter(
             model.DrugMaster.medicine_id == medicine_id,
-            model.DrugMaster.facility_id == current_user.facility_id,
+            model.DrugMaster.facility_id == effective_facility_id,
             model.DrugMaster.is_deleted == False
         ).first()
         
@@ -406,7 +428,7 @@ async def update_drug(
         if drug_update.medicine_name is not None and drug_update.medicine_name != drug.medicine_name:
             existing = db.query(model.DrugMaster).filter(
                 model.DrugMaster.medicine_name == drug_update.medicine_name,
-                model.DrugMaster.facility_id == current_user.facility_id,
+                model.DrugMaster.facility_id == effective_facility_id,
                 model.DrugMaster.is_deleted == False,
                 model.DrugMaster.medicine_id != medicine_id
             ).first()
@@ -467,7 +489,9 @@ async def create_symptom(
 ):
     """Create a new symptom in master data"""
     try:
-        if symptom.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, symptom.facility_id)
+        
+        if symptom.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only create data for your facility")
         
         existing = db.query(model.SymptomMaster).filter(
@@ -505,13 +529,16 @@ async def create_symptom(
 async def get_symptoms(
     search: Optional[str] = Query(None, description="Search by symptom name"),
     is_active: bool = Query(True),
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get list of symptoms"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         query = db.query(model.SymptomMaster).filter(
-            model.SymptomMaster.facility_id == current_user.facility_id,
+            model.SymptomMaster.facility_id == effective_facility_id,
             model.SymptomMaster.is_active == is_active,
             model.SymptomMaster.is_deleted == False
         )
@@ -533,14 +560,17 @@ async def get_symptoms(
 @router.delete("/symptom-master/{symptom_id}", tags=["Master Data"])
 async def delete_symptom(
     symptom_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Soft delete a symptom"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         symptom = db.query(model.SymptomMaster).filter(
             model.SymptomMaster.symptom_id == symptom_id,
-            model.SymptomMaster.facility_id == current_user.facility_id,
+            model.SymptomMaster.facility_id == effective_facility_id,
             model.SymptomMaster.is_deleted == False
         ).first()
         
@@ -564,14 +594,17 @@ async def delete_symptom(
 async def update_symptom(
     symptom_id: int,
     symptom_update: SymptomMasterUpdate,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update an existing symptom in master data"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         symptom = db.query(model.SymptomMaster).filter(
             model.SymptomMaster.symptom_id == symptom_id,
-            model.SymptomMaster.facility_id == current_user.facility_id,
+            model.SymptomMaster.facility_id == effective_facility_id,
             model.SymptomMaster.is_deleted == False
         ).first()
         
@@ -582,7 +615,7 @@ async def update_symptom(
         if symptom_update.symptom_name is not None and symptom_update.symptom_name != symptom.symptom_name:
             existing = db.query(model.SymptomMaster).filter(
                 model.SymptomMaster.symptom_name == symptom_update.symptom_name,
-                model.SymptomMaster.facility_id == current_user.facility_id,
+                model.SymptomMaster.facility_id == effective_facility_id,
                 model.SymptomMaster.is_deleted == False,
                 model.SymptomMaster.symptom_id != symptom_id
             ).first()
@@ -629,7 +662,9 @@ async def create_lab_test(
 ):
     """Create a new lab test in master data"""
     try:
-        if lab_test.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, lab_test.facility_id)
+        
+        if lab_test.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only create data for your facility")
         
         existing = db.query(model.LabMaster).filter(
@@ -667,13 +702,16 @@ async def create_lab_test(
 async def get_lab_tests(
     search: Optional[str] = Query(None, description="Search by test name"),
     is_active: bool = Query(True),
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get list of lab tests"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         query = db.query(model.LabMaster).filter(
-            model.LabMaster.facility_id == current_user.facility_id,
+            model.LabMaster.facility_id == effective_facility_id,
             model.LabMaster.is_active == is_active,
             model.LabMaster.is_deleted == False
         )
@@ -697,14 +735,17 @@ async def get_lab_tests(
 @router.delete("/lab-master/{test_id}", tags=["Master Data"])
 async def delete_lab_test(
     test_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Soft delete a lab test"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         test = db.query(model.LabMaster).filter(
             model.LabMaster.test_id == test_id,
-            model.LabMaster.facility_id == current_user.facility_id,
+            model.LabMaster.facility_id == effective_facility_id,
             model.LabMaster.is_deleted == False
         ).first()
         
@@ -728,14 +769,17 @@ async def delete_lab_test(
 async def update_lab_test(
     test_id: int,
     lab_update: LabMasterUpdate,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update an existing lab test in master data"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         test = db.query(model.LabMaster).filter(
             model.LabMaster.test_id == test_id,
-            model.LabMaster.facility_id == current_user.facility_id,
+            model.LabMaster.facility_id == effective_facility_id,
             model.LabMaster.is_deleted == False
         ).first()
         
@@ -746,7 +790,7 @@ async def update_lab_test(
         if lab_update.test_name is not None and lab_update.test_name != test.test_name:
             existing = db.query(model.LabMaster).filter(
                 model.LabMaster.test_name == lab_update.test_name,
-                model.LabMaster.facility_id == current_user.facility_id,
+                model.LabMaster.facility_id == effective_facility_id,
                 model.LabMaster.is_deleted == False,
                 model.LabMaster.test_id != test_id
             ).first()
@@ -800,7 +844,9 @@ async def create_template(
 ):
     """Create a new diagnosis template"""
     try:
-        if template_data.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, template_data.facility_id)
+        
+        if template_data.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only create templates for your facility")
         
         # Check if template exists (not deleted)
@@ -910,13 +956,16 @@ async def get_templates(
     template_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     is_active: bool = Query(True),
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get list of templates"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         query = db.query(model.Template).filter(
-            model.Template.facility_id == current_user.facility_id,
+            model.Template.facility_id == effective_facility_id,
             model.Template.is_active == is_active,
             model.Template.is_deleted == False
         )
@@ -942,13 +991,16 @@ async def get_templates(
 
 @router.get("/all/list", tags=["Templates"])
 async def get_all_templates(
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all templates regardless of active status"""
     try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         templates = db.query(model.Template).filter(
-            model.Template.facility_id == current_user.facility_id,
+            model.Template.facility_id == effective_facility_id,
             model.Template.is_deleted == False
         ).order_by(model.Template.template_name).all()
         
@@ -966,6 +1018,7 @@ async def get_all_templates(
 @router.get("/{template_id}", tags=["Templates"])
 async def get_template_details(
     template_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -983,7 +1036,9 @@ async def get_template_details(
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         
-        if template.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        if template.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only access templates from your facility")
         
         return {
@@ -1028,6 +1083,7 @@ async def get_template_details(
 async def update_template(
     template_id: int,
     template_data: TemplateUpdate,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1041,7 +1097,9 @@ async def update_template(
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         
-        if template.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        if template.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only update templates from your facility")
         
         # Update basic fields
@@ -1116,6 +1174,7 @@ async def update_template(
 @router.delete("/{template_id}", tags=["Templates"])
 async def delete_template(
     template_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1129,7 +1188,9 @@ async def delete_template(
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         
-        if template.facility_id != current_user.facility_id:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        if template.facility_id != effective_facility_id:
             raise HTTPException(status_code=403, detail="You can only delete templates from your facility")
         
         template.is_deleted = True

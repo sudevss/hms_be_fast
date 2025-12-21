@@ -182,6 +182,20 @@ def get_day_of_week(date_obj: date) -> str:
 def format_time_slot(start_time: time, end_time: time) -> str:
     return f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
 
+def get_effective_facility_id(current_user: CurrentUser, facility_id: Optional[int]) -> int:
+    """
+    Determine the effective facility_id based on user role
+    - Super Admin: Use provided facility_id parameter (required)
+    - Regular User: Always use facility_id from token
+    """
+    if current_user.is_super_admin():
+        if facility_id is None:
+            raise HTTPException(status_code=400, detail="facility_id is required for super admins")
+        return facility_id
+    else:
+        # Regular user - always use facility_id from token, ignore parameter
+        return current_user.facility_id
+
 
 def calculate_total_facility_slots_optimized(db: Session, facility_id: int, target_date: date) -> int:
     """
@@ -296,20 +310,18 @@ def is_slot_available(db: Session, facility_id: int, doctor_id: int,
 
 @router.get("/details", response_model=AppointmentDetailsResponse_Original)
 def get_appointment_details(
-    FacilityID: int = Query(...),
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional for regular users, required for super admins)"),
     date: date = Query(...),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     start_time = time_module.time()
-    logger.info(f"Starting appointment details query for facility {FacilityID} on {date}")
     
-    # Verify user has access to this facility (unless super admin)
-    if not current_user.is_super_admin() and current_user.facility_id != FacilityID:
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this facility's data"
-        )
+    # Get effective facility_id based on user role
+    effective_facility_id = get_effective_facility_id(current_user, facility_id)
+    logger.info(f"User accessing facility {effective_facility_id}")
+    
+    logger.info(f"Starting appointment details query for facility {effective_facility_id} on {date}")
     
     try:
         # Optimized hourly data query
@@ -317,7 +329,7 @@ def get_appointment_details(
             extract("hour", model.Appointment.AppointmentTime).label("hour"), 
             func.count(model.Appointment.appointment_id).label("count")
         ).filter(
-            model.Appointment.facility_id == FacilityID, 
+            model.Appointment.facility_id == effective_facility_id, 
             model.Appointment.AppointmentDate == date,
             model.Appointment.Cancelled == False
         ).group_by("hour").order_by("hour").all()
@@ -327,14 +339,14 @@ def get_appointment_details(
 
         # Total appointments
         total_appointments = db.query(func.count(model.Appointment.appointment_id)).filter(
-            model.Appointment.facility_id == FacilityID, 
+            model.Appointment.facility_id == effective_facility_id, 
             model.Appointment.AppointmentDate == date,
             model.Appointment.Cancelled == False
         ).scalar() or 0
 
         # Total check-ins
         total_checkin = db.query(func.count(model.Appointment.appointment_id)).filter(
-            model.Appointment.facility_id == FacilityID, 
+            model.Appointment.facility_id == effective_facility_id, 
             model.Appointment.AppointmentDate == date,
             model.Appointment.Cancelled == False,
             model.Appointment.CheckinTime.isnot(None)
@@ -342,14 +354,14 @@ def get_appointment_details(
 
         # Total walk-ins
         total_walkins = db.query(func.count(model.Appointment.appointment_id)).filter(
-            model.Appointment.facility_id == FacilityID, 
+            model.Appointment.facility_id == effective_facility_id, 
             model.Appointment.AppointmentDate == date,
             model.Appointment.Cancelled == False,
             func.lower(model.Appointment.AppointmentMode).like('w%')
         ).scalar() or 0
 
         # Use updated slot calculation for total slots
-        total_facility_slots = calculate_total_facility_slots_optimized(db, FacilityID, date)
+        total_facility_slots = calculate_total_facility_slots_optimized(db, effective_facility_id, date)
         
         # Calculate available (free) slots = Total slots - Booked appointments
         available_slots = max(0, total_facility_slots - total_appointments)
@@ -370,7 +382,7 @@ def get_appointment_details(
 
 @router.get("/getDoctorDetails", response_model=DoctorDashboardResponse)
 async def get_doctor_details_for_dashboard(
-    facility_id: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional for regular users, required for super admins)"),
     date: date = Query(..., description="Date in YYYY-MM-DD format"),
     doctor_id: Optional[int] = Query(None, description="Optional Doctor ID for filtering"),
     DoctorName: Optional[str] = Query(None, description="Optional Doctor Name for filtering"),
@@ -378,25 +390,23 @@ async def get_doctor_details_for_dashboard(
     db: Session = Depends(get_db)
 ):
     start_time = time_module.time()
-    logger.info(f"Starting doctor dashboard query for facility {facility_id} on {date}")
     
-    # Verify user has access to this facility (unless super admin)
-    if not current_user.is_super_admin() and current_user.facility_id != facility_id:
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this facility's data"
-        )
+    # Get effective facility_id based on user role
+    effective_facility_id = get_effective_facility_id(current_user, facility_id)
+    logger.info(f"User accessing facility {effective_facility_id}")
+    
+    logger.info(f"Starting doctor dashboard query for facility {effective_facility_id} on {date}")
     
     try:
         day_of_week = get_day_of_week(date)
         
         # Verify facility exists
-        facility = db.query(model.Facility.facility_id).filter(model.Facility.facility_id == facility_id).first()
+        facility = db.query(model.Facility.facility_id).filter(model.Facility.facility_id == effective_facility_id).first()
         if not facility:
             raise HTTPException(status_code=404, detail="Facility not found")
 
         # Get ALL doctors in the facility for display
-        all_doctors = db.query(model.Doctors).filter(model.Doctors.facility_id == facility_id).all()
+        all_doctors = db.query(model.Doctors).filter(model.Doctors.facility_id == effective_facility_id).all()
         
         # Build filtered appointments query based on doctor filter - NOW INCLUDING DIAGNOSIS_ID
         appointments_query = db.query(
@@ -407,7 +417,7 @@ async def get_doctor_details_for_dashboard(
             model.Appointment.appointment_id == model.PatientDiagnosis.appointment_id
         ).filter(
             and_(
-                model.Appointment.facility_id == facility_id,
+                model.Appointment.facility_id == effective_facility_id,
                 model.Appointment.AppointmentDate == date
             )
         )
@@ -427,7 +437,7 @@ async def get_doctor_details_for_dashboard(
             # Find doctors matching the name
             matching_doctors = db.query(model.Doctors.id).filter(
                 and_(
-                    model.Doctors.facility_id == facility_id,
+                    model.Doctors.facility_id == effective_facility_id,
                     func.concat(model.Doctors.firstname, ' ', model.Doctors.lastname).ilike(f"%{DoctorName.strip()}%")
                 )
             ).all()
@@ -441,7 +451,7 @@ async def get_doctor_details_for_dashboard(
             else:
                 # No matching doctors found
                 logger.warning(f"No doctors found matching name: {DoctorName}")
-                return create_empty_response_with_all_doctors(facility_id, date, day_of_week, doctor_filter_info, all_doctors, db)
+                return create_empty_response_with_all_doctors(effective_facility_id, date, day_of_week, doctor_filter_info, all_doctors, db)
         else:
             # No filters applied - show all doctors' appointments
             logger.info("No doctor filters applied, showing all appointments")
@@ -466,10 +476,10 @@ async def get_doctor_details_for_dashboard(
         # Calculate summary with filtered appointments and filtered doctor IDs for available slots
         # If no doctor filter is applied, use all doctor IDs
         doctor_ids_for_summary = filtered_doctor_ids if filtered_doctor_ids else [doctor.id for doctor in all_doctors]
-        summary = calculate_summary_for_filtered_doctors(appointments, doctor_ids_for_summary, db, facility_id, date)
+        summary = calculate_summary_for_filtered_doctors(appointments, doctor_ids_for_summary, db, effective_facility_id, date)
         
         # Get ALL doctors info with their status (not just filtered ones)
-        doctors_info = get_doctors_info_optimized(all_doctors, date, facility_id, db, day_of_week)
+        doctors_info = get_doctors_info_optimized(all_doctors, date, effective_facility_id, db, day_of_week)
         
         # Filter appointments by current date AND only show checked-in appointments in token data
         from datetime import date as date_class
@@ -487,7 +497,7 @@ async def get_doctor_details_for_dashboard(
         logger.info(f"Doctor dashboard query completed in {time_module.time() - start_time:.2f}s")
 
         return DoctorDashboardResponse(
-            facility_id=facility_id,
+            facility_id=effective_facility_id,
             date=date.strftime("%Y-%m-%d"),
             day_of_week=day_of_week,
             doctor_filter=doctor_filter_info if doctor_filter_info else None,
@@ -918,7 +928,7 @@ def get_token_data_optimized(appointments: List[model.Appointment], doctors: Lis
 
 @router.get("/getCheckinDetails", response_model=CheckinResponse)
 async def get_checkin_details_for_dashboard(
-    FacilityID: int = Query(..., description="Facility ID"),
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional for regular users, required for super admins)"),
     Date: date = Query(..., description="Date in YYYY-MM-DD format (e.g., 2025-07-26)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -927,26 +937,24 @@ async def get_checkin_details_for_dashboard(
     Check-in details endpoint
     """
     start_time = time_module.time()
-    logger.info(f"Starting checkin details query for facility {FacilityID} on {Date}")
     
-    # Verify user has access to this facility (unless super admin)
-    if not current_user.is_super_admin() and current_user.facility_id != FacilityID:
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this facility's data"
-        )
+    # Get effective facility_id based on user role
+    effective_facility_id = get_effective_facility_id(current_user, facility_id)
+    logger.info(f"User accessing facility {effective_facility_id}")
+    
+    logger.info(f"Starting checkin details query for facility {effective_facility_id} on {Date}")
     
     try:
         day_of_week = get_day_of_week(Date)
         
-        facility = db.query(model.Facility.facility_id).filter(model.Facility.facility_id == FacilityID).first()
+        facility = db.query(model.Facility.facility_id).filter(model.Facility.facility_id == effective_facility_id).first()
         if not facility:
             raise HTTPException(status_code=404, detail="Facility not found")
         
         # Optimized query with limited joins
         appointments = db.query(model.Appointment).filter(
             and_(
-                model.Appointment.facility_id == FacilityID, 
+                model.Appointment.facility_id == effective_facility_id, 
                 model.Appointment.AppointmentDate == Date
             )
         ).options(
@@ -956,7 +964,7 @@ async def get_checkin_details_for_dashboard(
         
         if not appointments:
             return CheckinResponse(
-                facility_id=FacilityID, 
+                facility_id=effective_facility_id, 
                 date=Date.strftime("%Y-%m-%d"), 
                 day_of_week=day_of_week,
                 appointments=[], 
@@ -1030,7 +1038,7 @@ async def get_checkin_details_for_dashboard(
         logger.info(f"Checkin details query completed in {time_module.time() - start_time:.2f}s")
         
         return CheckinResponse(
-            facility_id=FacilityID, 
+            facility_id=effective_facility_id, 
             date=Date.strftime("%Y-%m-%d"), 
             day_of_week=day_of_week,
             appointments=appointments_info, 

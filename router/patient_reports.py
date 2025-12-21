@@ -68,6 +68,18 @@ class PatientReportCreate(BaseModel):
             }
         }
 
+# Helper function to get effective facility_id based on user role
+def get_effective_facility_id(current_user: CurrentUser, requested_facility_id: int) -> int:
+    """
+    Determine which facility_id to use based on user role:
+    - Super Admin: Use requested_facility_id parameter
+    - Regular User: Always use facility_id from token (ignore parameter)
+    """
+    if current_user.role == "superadmin":
+        return requested_facility_id
+    else:
+        return current_user.facility_id
+
 # Helper function to convert SQLAlchemy model to dict
 def report_to_dict(report) -> Dict[str, Any]:
     """Convert PatientReports object to dictionary for JSON response (excluding FILE_BLOB)"""
@@ -124,7 +136,7 @@ def get_database_size():
 # API Endpoints
 @router.post("/upload", tags=["patient-reports"])
 async def upload_patient_report(
-    facility_id: int = Form(..., description="Facility ID (mandatory)"),
+    facility_id: Optional[int] = Form(None, description="Facility ID (optional for regular users, mandatory for superadmins)"),
     patient_id: int = Form(..., description="Patient ID (mandatory)"),
     report_date: Date = Form(..., description="Report date (mandatory)"),
     appointment_id: Optional[int] = Form(None, description="Associated appointment ID (optional)"),
@@ -139,12 +151,12 @@ async def upload_patient_report(
     Requires authentication.
     
     All required fields must be provided:
-    - facility_id: ID of the facility (required)
     - patient_id: ID of the patient (required)
     - report_date: Date of the report (required)
     - files: Binary files to upload (required)
     
     Optional fields:
+    - facility_id: ID of the facility (optional - uses token facility_id for regular users, required for superadmins)
     - appointment_id: Associated appointment ID
     - diagnosis_id: Associated diagnosis ID
     - file_titles: List of titles/descriptions for each file (optional)
@@ -152,12 +164,16 @@ async def upload_patient_report(
     Returns: JSON object with success message and created record
     """
     try:
-        # Verify user belongs to the same facility
-        if current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="You can only upload reports for your assigned facility"
-            )
+        # Get effective facility_id based on user role
+        if current_user.role == "superadmin":
+            if facility_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="facility_id is required for superadmin users"
+                )
+            effective_facility_id = facility_id
+        else:
+            effective_facility_id = current_user.facility_id
         
         # Check disk space first
         free_space_mb = check_disk_space()
@@ -173,9 +189,9 @@ async def upload_patient_report(
             logger.warning(f"Database size is {db_size_mb:.2f}MB - consider cleanup")
         
         # Validate that the facility exists
-        if facility_id:
+        if effective_facility_id:
             facility = db.query(model.Facility).filter(
-                model.Facility.facility_id == facility_id
+                model.Facility.facility_id == effective_facility_id
             ).first()
             if not facility:
                 raise HTTPException(status_code=400, detail="Facility not found")
@@ -260,7 +276,7 @@ async def upload_patient_report(
                 
                 # Create new patient report record for each file
                 new_report = model.PatientReports(
-                    facility_id=facility_id,
+                    facility_id=effective_facility_id,
                     patient_id=patient_id,
                     DATE=report_date,
                     appointment_id=appointment_id,
@@ -324,9 +340,9 @@ async def upload_patient_report(
 
 @router.get("/file", tags=["patient-reports"])
 async def get_patient_report_file(
-    facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
     upload_id: int = Query(..., description="Upload ID (mandatory)"),
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional for regular users, mandatory for superadmins)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -335,25 +351,31 @@ async def get_patient_report_file(
     Requires authentication.
     
     Mandatory parameters:
-    - facility_id: Filter by facility ID
     - patient_id: Filter by patient ID
     - upload_id: Filter by upload ID
+    
+    Optional parameters:
+    - facility_id: Filter by facility ID (optional - uses token facility_id for regular users, required for superadmins)
     
     Returns: Binary file content for download
     """
     try:
-        # Verify user belongs to the same facility
-        if current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="You can only access reports from your assigned facility"
-            )
+        # Get effective facility_id based on user role
+        if current_user.role == "superadmin":
+            if facility_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="facility_id is required for superadmin users"
+                )
+            effective_facility_id = facility_id
+        else:
+            effective_facility_id = current_user.facility_id
         
         # Query for the specific report with all required parameters
         report = db.query(model.PatientReports).filter(
             and_(
                 model.PatientReports.upload_id == upload_id,
-                model.PatientReports.facility_id == facility_id,
+                model.PatientReports.facility_id == effective_facility_id,
                 model.PatientReports.patient_id == patient_id
             )
         ).first()
@@ -396,8 +418,8 @@ async def get_patient_report_file(
 
 @router.get("/", tags=["patient-reports"])
 async def get_patient_reports(
-    facility_id: int = Query(..., description="Facility ID (mandatory)"),
     patient_id: int = Query(..., description="Patient ID (mandatory)"),
+    facility_id: Optional[int] = Query(None, description="Facility ID (optional for regular users, mandatory for superadmins)"),
     appointment_id: Optional[int] = Query(None, description="Appointment ID (optional)"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -407,26 +429,30 @@ async def get_patient_reports(
     Requires authentication.
     
     Mandatory parameters:
-    - facility_id: Filter by facility ID
     - patient_id: Filter by patient ID
     
     Optional parameters:
+    - facility_id: Filter by facility ID (optional - uses token facility_id for regular users, required for superadmins)
     - appointment_id: Filter by appointment ID
     
     Returns: JSON array of report records (excluding file binary data)
     """
     try:
-        # Verify user belongs to the same facility
-        if current_user.facility_id != facility_id:
-            raise HTTPException(
-                status_code=403, 
-                detail="You can only view reports from your assigned facility"
-            )
+        # Get effective facility_id based on user role
+        if current_user.role == "superadmin":
+            if facility_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="facility_id is required for superadmin users"
+                )
+            effective_facility_id = facility_id
+        else:
+            effective_facility_id = current_user.facility_id
         
         # Query with mandatory filters
         query = db.query(model.PatientReports).filter(
             and_(
-                model.PatientReports.facility_id == facility_id,
+                model.PatientReports.facility_id == effective_facility_id,
                 model.PatientReports.patient_id == patient_id
             )
         )
