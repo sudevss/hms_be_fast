@@ -689,4 +689,21 @@ class PatientReports(Base):
         Index("idx_patient_reports_appointment", "appointment_id"),
     )
 
+
+class HMSParams(Base):
+    """HMS Parameters table for storing system configuration parameters"""
+    __tablename__ = "hms_params"
+    
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), primary_key=True)
+    param_name = Column(String(100), primary_key=True)
+    param_value = Column(String(500), nullable=False)
+    
+    # Relationship
+    facility = relationship("Facility")
+    
+    __table_args__ = (
+        Index("idx_hms_params_facility", "facility_id"),
+        Index("idx_hms_params_name", "param_name"),
+        CheckConstraint("LENGTH(param_name) >= 2", name="chk_param_name_length"),
+    )
     
