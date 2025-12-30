@@ -77,6 +77,18 @@ def get_hourly_slots_for_date(db: Session, facility_id: int, target_date: date) 
                 }
             
             if schedule.total_slots:
+                try:
+                    # Convert total_slots to int (handles string or numeric types)
+                    total_slots_int = int(schedule.total_slots)
+                except (ValueError, TypeError):
+                    # If conversion fails, fall back to slot_duration calculation
+                    logger.warning(f"Invalid total_slots value: {schedule.total_slots}. Using slot_duration instead.")
+                    slot_duration = schedule.slot_duration_minutes or 15
+                    slots_per_hour = 60 // slot_duration
+                    hourly_slots[current_hour]['total_slots'] += slots_per_hour
+                    current_hour += 1
+                    continue
+                
                 schedule_start_minutes = schedule.slot_start_time.hour * 60 + schedule.slot_start_time.minute
                 schedule_end_minutes = schedule.slot_end_time.hour * 60 + schedule.slot_end_time.minute
                 schedule_duration = schedule_end_minutes - schedule_start_minutes
@@ -87,7 +99,7 @@ def get_hourly_slots_for_date(db: Session, facility_id: int, target_date: date) 
                     overlap_start = max(schedule_start_minutes, hour_start_minutes)
                     overlap_end = min(schedule_end_minutes, hour_end_minutes)
                     overlap_duration = overlap_end - overlap_start
-                    hour_slots = int((schedule.total_slots * overlap_duration) / schedule_duration)
+                    hour_slots = int((total_slots_int * overlap_duration) / schedule_duration)
                     hourly_slots[current_hour]['total_slots'] += hour_slots
             else:
                 slot_duration = schedule.slot_duration_minutes or 15
