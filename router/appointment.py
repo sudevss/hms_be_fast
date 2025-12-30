@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, and_
@@ -101,7 +100,20 @@ def get_hourly_slots_for_date(db: Session, facility_id: int, target_date: date) 
 
 
 def generate_daily_token_table(db: Session, facility_id: int, target_date: date) -> List[Dict]:
-    """Generate a token table for the day based on hourly slots and walk-in reserve ratio."""
+    """
+    Generate a token table for the day based on hourly slots and walk-in reserve ratio.
+    
+    Logic:
+    - Tokens are sequential across the entire day
+    - For each hourly slot:
+      - Appointment tokens come first (A series)
+      - Walk-in tokens follow immediately after (W series)
+    - Next slot's appointment tokens start right after previous slot's walk-in tokens
+    
+    Example for 40% walk-in ratio:
+    Slot 9-10 (20 total): A001-A012 (12 appt), W013-W020 (8 walkin)
+    Slot 10-11 (15 total): A021-A029 (9 appt), W030-W035 (6 walkin)
+    """
     walkin_reserve_ratio = get_walkin_reserve_ratio(db, facility_id)
     hourly_slots = get_hourly_slots_for_date(db, facility_id, target_date)
     
@@ -110,18 +122,22 @@ def generate_daily_token_table(db: Session, facility_id: int, target_date: date)
         return []
     
     token_table = []
-    appointment_start = 1
-    walkin_start = 1  # This will be updated to continue from appointment tokens
+    current_token_number = 1  # Start from 1 and increment continuously
     
     for slot in hourly_slots:
         total_slots = slot['total_slots']
         walkin_tokens = int(total_slots * walkin_reserve_ratio)
         appointment_tokens = total_slots - walkin_tokens
-        appointment_end = appointment_start + appointment_tokens - 1
         
-        # Walk-in tokens should continue from where appointment tokens end
-        walkin_start = appointment_end + 1
-        walkin_end = walkin_start + walkin_tokens - 1
+        # Appointment tokens
+        appointment_from = current_token_number
+        appointment_to = current_token_number + appointment_tokens - 1
+        current_token_number = appointment_to + 1
+        
+        # Walk-in tokens follow immediately after appointment tokens
+        walkin_from = current_token_number
+        walkin_to = current_token_number + walkin_tokens - 1
+        current_token_number = walkin_to + 1
         
         token_table.append({
             "slot": f"{slot['start_time'].strftime('%H:%M')} to {slot['end_time'].strftime('%H:%M')}",
@@ -131,14 +147,11 @@ def generate_daily_token_table(db: Session, facility_id: int, target_date: date)
             "total_slots": total_slots,
             "appointment_tokens": appointment_tokens,
             "walkin_tokens": walkin_tokens,
-            "appointment_from": appointment_start,
-            "appointment_to": appointment_end,
-            "walkin_from": walkin_start,
-            "walkin_to": walkin_end,
+            "appointment_from": appointment_from,
+            "appointment_to": appointment_to,
+            "walkin_from": walkin_from,
+            "walkin_to": walkin_to,
         })
-        
-        # Next slot's appointment tokens should start after current slot's walk-in tokens
-        appointment_start = walkin_end + 1
     
     logger.info(f"Generated token table with {len(token_table)} hourly slots for {target_date}")
     return token_table
@@ -149,9 +162,13 @@ def get_next_token_number(db: Session, facility_id: int, appointment_time: time,
     """
     Get the next available token number for a specific time slot.
     
-    Walk-in Logic: Assign to the specific hour's walk-in token range ONLY
-    Appointment Logic: Assign to the specific hour's appointment token range first,
-                       then fill unused tokens from earlier slots if current hour is full
+    Logic:
+    3.a. For scheduled appointments (on-time): Allocate from A series in the slot's range
+    3.b. Return the token number to the patient
+    4.a. For walk-in / early check-in: Allocate from W series in the slot's range
+    4.b. If no W tokens left in current slot, find the latest W token issued
+    4.c. Get the next available W token from the token table
+    4.d. If no W tokens left in table, increment the highest W token number
     """
     token_table = generate_daily_token_table(db, facility_id, appointment_date)
     if not token_table:
@@ -162,7 +179,11 @@ def get_next_token_number(db: Session, facility_id: int, appointment_time: time,
     if not slot_info:
         raise ValueError(f"No token slot found for time {appointment_time}")
     
-    # Get all existing tokens for the day
+    # Determine token type and prefix
+    is_appointment = token_type.lower() in ['appointment', 'a']
+    prefix = "A" if is_appointment else "W"
+    
+    # Get all existing tokens for this date
     existing_tokens = db.query(Appointment.TokenID).filter(
         Appointment.facility_id == facility_id,
         Appointment.AppointmentDate == appointment_date,
@@ -177,53 +198,66 @@ def get_next_token_number(db: Session, facility_id: int, appointment_time: time,
             except ValueError:
                 continue
     
-    # WALK-IN LOGIC: Assign to specific hour's walk-in range ONLY
-    if token_type.lower() in ['walkin', 'w']:
-        prefix = "W"
-        from_token = slot_info['walkin_from']
-        to_token = slot_info['walkin_to']
-        
-        # Try to find available token in THIS hour's walk-in range only
-        for token_num in range(from_token, to_token + 1):
-            if token_num not in used_token_numbers:
-                return f"{prefix}{token_num:03d}", slot_info['slot']
-        
-        # If this hour's walk-in tokens are full, raise error
-        raise ValueError(f"No available walk-in tokens for time slot {slot_info['slot']}. All walk-in slots for this hour are booked.")
-    
-    # APPOINTMENT LOGIC: Try current hour first, then fill from earliest unused
-    else:
-        prefix = "A"
+    # Case 1: Appointment token (on-time check-in)
+    if is_appointment:
         from_token = slot_info['appointment_from']
         to_token = slot_info['appointment_to']
         
-        # STEP 1: Try to assign token from the CURRENT HOUR's appointment range first
+        # Try to find available token in the current slot's appointment range
         for token_num in range(from_token, to_token + 1):
             if token_num not in used_token_numbers:
                 return f"{prefix}{token_num:03d}", slot_info['slot']
         
-        # STEP 2: If current hour is full, fill unused tokens from EARLIER slots
+        # If no appointment tokens available in current slot, try next slots
         current_slot_index = token_table.index(slot_info)
-        for earlier_slot in token_table[:current_slot_index]:
-            earlier_from = earlier_slot['appointment_from']
-            earlier_to = earlier_slot['appointment_to']
-            
-            for token_num in range(earlier_from, earlier_to + 1):
+        for next_slot in token_table[current_slot_index + 1:]:
+            for token_num in range(next_slot['appointment_from'], next_slot['appointment_to'] + 1):
                 if token_num not in used_token_numbers:
-                    # Return token from earlier slot, but keep the actual appointment time slot info
-                    return f"{prefix}{token_num:03d}", slot_info['slot']
+                    return f"{prefix}{token_num:03d}", next_slot['slot']
         
-        # STEP 3: If earlier slots are also full, check LATER slots
-        for later_slot in token_table[current_slot_index + 1:]:
-            later_from = later_slot['appointment_from']
-            later_to = later_slot['appointment_to']
-            
-            for token_num in range(later_from, later_to + 1):
-                if token_num not in used_token_numbers:
-                    return f"{prefix}{token_num:03d}", slot_info['slot']
-        
-        # If all appointment tokens are used across all slots
         raise ValueError(f"No available appointment tokens for {appointment_date}")
+    
+    # Case 2: Walk-in token (or early check-in for emergency)
+    else:
+        from_token = slot_info['walkin_from']
+        to_token = slot_info['walkin_to']
+        
+        # 4.a. Try to find available token in the current slot's walk-in range
+        for token_num in range(from_token, to_token + 1):
+            if token_num not in used_token_numbers:
+                return f"{prefix}{token_num:03d}", slot_info['slot']
+        
+        # 4.b. No W tokens left in current slot - find the latest W token issued
+        # FIXED: Find ALL walk-in tokens that have been issued across all slots
+        walkin_tokens_used = []
+        for slot in token_table:
+            for num in used_token_numbers:
+                if slot['walkin_from'] <= num <= slot['walkin_to']:
+                    walkin_tokens_used.append(num)
+        
+        if walkin_tokens_used:
+            latest_walkin_token = max(walkin_tokens_used)
+            
+            # 4.c. Try to get next available W token from token table after the latest issued
+            for slot in token_table:
+                for token_num in range(slot['walkin_from'], slot['walkin_to'] + 1):
+                    if token_num > latest_walkin_token and token_num not in used_token_numbers:
+                        return f"{prefix}{token_num:03d}", slot['slot']
+            
+            # 4.d. No W tokens left in table - increment the highest W token number
+            next_token_num = latest_walkin_token + 1
+            logger.warning(f"All walk-in tokens exhausted. Creating overflow token W{next_token_num:03d}")
+            # Find which slot this would theoretically belong to
+            overflow_slot = token_table[-1]['slot']  # Use last slot as reference
+            return f"{prefix}{next_token_num:03d}", f"{overflow_slot} (overflow)"
+        else:
+            # This shouldn't happen, but if no walk-in tokens have been used, try from the beginning
+            for slot in token_table:
+                for token_num in range(slot['walkin_from'], slot['walkin_to'] + 1):
+                    if token_num not in used_token_numbers:
+                        return f"{prefix}{token_num:03d}", slot['slot']
+            
+            raise ValueError(f"No available walk-in tokens for {appointment_date}")
 
 
 def validate_token_availability(db: Session, facility_id: int, appointment_time: time,
@@ -772,113 +806,6 @@ def get_appointment(
     })
 
 
-@router.post("/", response_model=AppointmentResponse)
-def create_appointment(
-    appointment: AppointmentCreate,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if not current_user.is_super_admin():
-        appointment.facility_id = current_user.facility_id
-    
-    effective_facility_id = appointment.facility_id
-    payload = appointment.dict(exclude_unset=True)
-    payload["facility_id"] = effective_facility_id
-    payload["Cancelled"] = False
-    if "AppointmentStatus" not in payload:
-        payload["AppointmentStatus"] = "Scheduled"
-
-    if not validate_doctor_availability(db, payload["doctor_id"], effective_facility_id, payload["appointment_date"], payload["appointment_time"]):
-        raise HTTPException(status_code=400, detail="Doctor is not available at the requested time")
-
-    # Validate token availability
-    token_type = payload.get("appointment_mode", "a").lower()
-    token_type_name = "appointment" if token_type == "a" else "walkin"
-    if not validate_token_availability(db, effective_facility_id, payload["appointment_time"], payload["appointment_date"], token_type_name):
-        raise HTTPException(status_code=400, detail=f"No {token_type_name} tokens available for the selected time slot")
-
-    exists = (
-        db.query(Appointment)
-        .filter(
-            Appointment.patient_id == payload["patient_id"],
-            Appointment.doctor_id == payload["doctor_id"],
-            Appointment.AppointmentDate == payload["appointment_date"],
-            Appointment.AppointmentTime == payload["appointment_time"],
-            Appointment.facility_id == effective_facility_id
-        )
-        .first()
-    )
-    if exists:
-        raise HTTPException(400, "Duplicate appointment exists")
-
-    try:
-        dcid = get_available_dcid(db, payload["doctor_id"], effective_facility_id, payload["appointment_date"], payload["appointment_time"])
-        payload["DCID"] = dcid
-        payload["TokenID"] = None
-        payload["CheckinTime"] = None
-
-        new_appt = Appointment(**payload)
-        db.add(new_appt)
-        
-        booked_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == dcid).first()
-        if booked_slot:
-            booked_slot.Booked_status = 'Booked'
-        
-        db.commit()
-        db.refresh(new_appt)
-        
-        result = (
-            db.query(
-                Appointment,
-                Patients.firstname.label('patient_firstname'),
-                Patients.lastname.label('patient_lastname'),
-                Patients.contact_number.label('patient_phone'),
-                Doctors.firstname.label('doctor_firstname'),
-                Doctors.lastname.label('doctor_lastname'),
-                Doctors.consultation_fee.label('doctor_consultation_fee'),
-                PatientDiagnosis.diagnosis_id.label('diagnosis_id')
-            )
-            .join(Patients, Appointment.patient_id == Patients.id)
-            .join(Doctors, Appointment.doctor_id == Doctors.id)
-            .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
-            .filter(Appointment.appointment_id == new_appt.appointment_id)
-            .first()
-        )
-        
-        if not result:
-            raise HTTPException(status_code=500, detail="Failed to fetch created appointment")
-        
-        appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id = result
-        
-        return AppointmentResponse(**{
-            "appointment_id": appointment.appointment_id,
-            "patient_id": appointment.patient_id,
-            "doctor_id": appointment.doctor_id,
-            "facility_id": appointment.facility_id,
-            "dcid": appointment.DCID,
-            "appointment_date": appointment.AppointmentDate,
-            "appointment_time": appointment.AppointmentTime,
-            "reason": appointment.Reason,
-            "appointment_mode": appointment.AppointmentMode,
-            "checkin_time": appointment.CheckinTime,
-            "cancelled": appointment.Cancelled,
-            "token_id": appointment.TokenID,
-            "appointment_status": appointment.AppointmentStatus,
-            "name": f"{patient_firstname} {patient_lastname}".strip(),
-            "phone": patient_phone,
-            "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
-            "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
-            "paid": True if appointment.payment_status == 1 else False,
-            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
-            "payment_comments": appointment.payment_comments,
-            "diagnosis_id": diagnosis_id
-        })
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Error creating appointment: {str(e)}")
-
-
 @router.post("/{appointment_id}/checkin", response_model=CheckinResponse)
 def checkin_appointment(
     appointment_id: int,
@@ -886,6 +813,13 @@ def checkin_appointment(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Check in an appointment and assign a token.
+    
+    Logic:
+    - For appointment mode ('a'): Assigns from A series (on-time check-in)
+    - For walk-in mode ('w'): Assigns from W series (walk-in or early check-in)
+    """
     effective_facility_id = get_effective_facility_id(current_user, facility_id)
     appt = (
         db.query(Appointment)
@@ -904,7 +838,7 @@ def checkin_appointment(
         mode = appt.AppointmentMode.lower() if appt.AppointmentMode else ""
         token_type = "appointment" if mode == "a" else "walkin" if mode == "w" else "appointment"
         
-        # Generate token using the new logic
+        # Generate token using the updated logic
         token_id, slot_info = get_next_token_number(db, effective_facility_id, appt.AppointmentTime, appt.AppointmentDate, token_type)
         
         utc_now = datetime.now(timezone.utc)
@@ -1068,155 +1002,6 @@ def complete_appointment(
         raise HTTPException(status_code=500, detail=f"Error completing appointment: {str(e)}")
 
 
-@router.patch("/{appointment_id}", response_model=AppointmentResponse)
-def update_appointment(
-    appointment_id: int,
-    updated: AppointmentUpdate,
-    facility_id: Optional[int] = Query(None),
-    current_user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    effective_facility_id = get_effective_facility_id(current_user, facility_id)
-    appt = (
-        db.query(Appointment)
-        .filter(Appointment.appointment_id == appointment_id, Appointment.facility_id == effective_facility_id)
-        .first()
-    )
-    if not appt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-
-    update_data = updated.dict(exclude_unset=True, exclude_none=True)
-    filtered_data = {}
-    current_time = datetime.now().time()
-    current_date = date.today()
-    
-    for k, v in update_data.items():
-        if v is None:
-            continue
-        if isinstance(v, str) and (v.strip() == "" or v.lower() == "string"):
-            continue
-        if isinstance(v, int) and v == 0:
-            continue
-        if isinstance(v, list) and len(v) == 0:
-            continue
-        if k == "appointment_date" and isinstance(v, date):
-            current_db_date = getattr(appt, k)
-            if current_db_date == v or v == current_date:
-                continue
-        if k == "appointment_time":
-            if v is None:
-                continue
-            if isinstance(v, time):
-                current_db_time = getattr(appt, k)
-                current_time_normalized = current_db_time.replace(second=0, microsecond=0)
-                new_time_normalized = v.replace(second=0, microsecond=0)
-                if current_time_normalized == new_time_normalized:
-                    continue
-                current_system_time = datetime.now().time()
-                current_system_minutes = current_system_time.hour * 60 + current_system_time.minute
-                new_time_minutes = v.hour * 60 + v.minute
-                if abs(current_system_minutes - new_time_minutes) <= 5:
-                    continue
-                if v.minute % 5 != 0:
-                    continue
-            else:
-                continue
-        if k == "appointment_mode" and isinstance(v, str):
-            if v.lower() == "string" or len(v.strip()) == 0:
-                continue
-        if k == "appointment_status" and isinstance(v, str):
-            if v.lower() == "string":
-                continue
-        current_value = getattr(appt, k, None)
-        if current_value == v:
-            continue
-        filtered_data[k] = v
-
-    if not filtered_data:
-        raise HTTPException(status_code=400, detail="No valid fields provided for update")
-
-    needs_slot_update = any(k in filtered_data for k in ['doctor_id', 'appointment_date', 'appointment_time'])
-    old_dcid = appt.DCID if needs_slot_update else None
-
-    if needs_slot_update:
-        new_doctor_id = filtered_data.get('doctor_id', appt.doctor_id)
-        new_date = filtered_data.get('appointment_date', appt.AppointmentDate)
-        new_time = filtered_data.get('appointment_time', appt.AppointmentTime)
-        
-        if not validate_doctor_availability(db, new_doctor_id, effective_facility_id, new_date, new_time):
-            raise HTTPException(status_code=400, detail="Doctor is not available at the requested time")
-        
-        new_dcid = get_available_dcid(db, new_doctor_id, effective_facility_id, new_date, new_time)
-        filtered_data['DCID'] = new_dcid
-
-    for field_name, new_value in filtered_data.items():
-        setattr(appt, field_name, new_value)
-
-    try:
-        if needs_slot_update:
-            if old_dcid:
-                old_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == old_dcid).first()
-                if old_slot:
-                    old_slot.Booked_status = 'Not Booked'
-            new_slot = db.query(DoctorBookedSlots).filter(DoctorBookedSlots.DCID == filtered_data['DCID']).first()
-            if new_slot:
-                new_slot.Booked_status = 'Booked'
-
-        db.commit()
-        db.refresh(appt)
-        
-        result = (
-            db.query(
-                Appointment,
-                Patients.firstname.label('patient_firstname'),
-                Patients.lastname.label('patient_lastname'),
-                Patients.contact_number.label('patient_phone'),
-                Doctors.firstname.label('doctor_firstname'),
-                Doctors.lastname.label('doctor_lastname'),
-                Doctors.consultation_fee.label('doctor_consultation_fee'),
-                PatientDiagnosis.diagnosis_id.label('diagnosis_id')
-            )
-            .join(Patients, Appointment.patient_id == Patients.id)
-            .join(Doctors, Appointment.doctor_id == Doctors.id)
-            .outerjoin(PatientDiagnosis, Appointment.appointment_id == PatientDiagnosis.appointment_id)
-            .filter(Appointment.appointment_id == appointment_id, Appointment.facility_id == effective_facility_id)
-            .first()
-        )
-        
-        if not result:
-            raise HTTPException(status_code=404, detail="Updated appointment not found")
-        
-        appointment, patient_firstname, patient_lastname, patient_phone, doctor_firstname, doctor_lastname, doctor_consultation_fee, diagnosis_id = result
-        
-        return AppointmentResponse(**{
-            "appointment_id": appointment.appointment_id,
-            "patient_id": appointment.patient_id,
-            "doctor_id": appointment.doctor_id,
-            "facility_id": appointment.facility_id,
-            "dcid": appointment.DCID,
-            "appointment_date": appointment.AppointmentDate,
-            "appointment_time": appointment.AppointmentTime,
-            "reason": appointment.Reason,
-            "appointment_mode": appointment.AppointmentMode,
-            "checkin_time": appointment.CheckinTime,
-            "cancelled": appointment.Cancelled,
-            "token_id": appointment.TokenID,
-            "appointment_status": appointment.AppointmentStatus,
-            "name": f"{patient_firstname} {patient_lastname}".strip(),
-            "phone": patient_phone,
-            "doctor": f"{doctor_firstname} {doctor_lastname}".strip(),
-            "time_slot": appointment.AppointmentTime.strftime("%H:%M") if appointment.AppointmentTime else None,
-            "paid": True if appointment.payment_status == 1 else False,
-            "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
-            "payment_comments": appointment.payment_comments,
-            "diagnosis_id": diagnosis_id
-        })
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-
 @router.delete("/{appointment_id}")
 def delete_appointment(
     appointment_id: int,
@@ -1244,47 +1029,6 @@ def delete_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error deleting appointment: {str(e)}")
-
-
-@router.get("/doctor-schedule/")
-def get_doctor_schedule(
-    doctor_id: int = Query(...),
-    facility_id: Optional[int] = Query(None),
-    start_date: date = Query(...),
-    end_date: date = Query(...),
-    current_user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    effective_facility_id = get_effective_facility_id(current_user, facility_id)
-    schedules = (
-        db.query(DoctorSchedule)
-        .filter(
-            DoctorSchedule.doctor_id == doctor_id,
-            DoctorSchedule.facility_id == effective_facility_id,
-            DoctorSchedule.start_date <= end_date,
-            DoctorSchedule.end_date >= start_date
-        )
-        .all()
-    )
-    
-    schedule_data = []
-    for schedule in schedules:
-        schedule_data.append({
-            "weekday": schedule.week_day,
-            "window_num": schedule.window_num,
-            "start_time": schedule.slot_start_time.strftime("%H:%M"),
-            "end_time": schedule.slot_end_time.strftime("%H:%M"),
-            "schedule_period": {
-                "start_date": schedule.start_date.strftime("%Y-%m-%d"),
-                "end_date": schedule.end_date.strftime("%Y-%m-%d")
-            }
-        })
-    
-    return {
-        "doctor_id": doctor_id,
-        "facility_id": facility_id,
-        "schedules": schedule_data
-    }
 
 
 @router.get("/patient/visit-reports", response_model=PatientVisitReportsListResponse)
