@@ -456,6 +456,38 @@ class QuickAppointmentCreate(BaseModel):
             raise ValueError(f"Payment method must be one of: {', '.join(valid_methods)}")
         return v or "Cash"
 
+
+    
+class AppointmentUpdateRequest(BaseModel):
+    """Request model for updating appointment details"""
+    AppointmentDate: Optional[date] = None
+    AppointmentTime: Optional[time] = None
+    AppointmentMode: Optional[str] = None
+
+    @validator('AppointmentTime', pre=True)
+    def parse_time(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            return parse_time_string(v)
+        if isinstance(v, datetime):
+            return v.time().replace(second=0, microsecond=0)
+        if isinstance(v, time):
+            return v.replace(second=0, microsecond=0)
+        raise ValueError("Invalid format for AppointmentTime")
+
+    @validator('AppointmentDate')
+    def validate_appointment_date(cls, v):
+        if v and v < date.today():
+            raise ValueError("Appointment date cannot be in the past")
+        return v
+
+    @validator('AppointmentMode')
+    def validate_appointment_mode(cls, v):
+        if v and v not in ['A', 'W', 'a', 'w']:
+            raise ValueError("AppointmentMode must be 'A' (Appointment) or 'W' (Walk-in)")
+        return v.upper() if v else None
+
 # -------------------- Endpoints --------------------
 @router.post("/book", response_model=DashboardAppointmentResponse)
 def dashboard_book_appointment(
@@ -837,3 +869,153 @@ def book_appointment_for_existing_patient(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error processing quick booking for existing patient: {str(e)}")
+
+@router.put("/update/{appointment_id}", response_model=DashboardAppointmentResponse)
+def update_appointment(
+    appointment_id: int,
+    update_data: AppointmentUpdateRequest = Body(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update appointment date, time, and/or mode (Requires Authentication)"""
+    try:
+        # Fetch existing appointment
+        appointment = db.query(model.Appointment).filter(
+            model.Appointment.appointment_id == appointment_id
+        ).first()
+        
+        if not appointment:
+            raise HTTPException(404, f"Appointment with ID {appointment_id} not found")
+        
+        # Check facility access based on user role
+        effective_facility_id = get_effective_facility_id(current_user, appointment.facility_id)
+        if appointment.facility_id != effective_facility_id:
+            raise HTTPException(403, "Access denied to this appointment")
+        
+        # Check if appointment is cancelled
+        if appointment.Cancelled:
+            raise HTTPException(400, "Cannot update a cancelled appointment")
+        
+        # Determine what needs to be updated
+        date_changed = update_data.AppointmentDate and update_data.AppointmentDate != appointment.AppointmentDate
+        time_changed = update_data.AppointmentTime and update_data.AppointmentTime != appointment.AppointmentTime
+        mode_changed = update_data.AppointmentMode and update_data.AppointmentMode != appointment.AppointmentMode
+        
+        if not (date_changed or time_changed or mode_changed):
+            raise HTTPException(400, "No changes detected. Please provide at least one field to update.")
+        
+        new_date = update_data.AppointmentDate if date_changed else appointment.AppointmentDate
+        new_time = update_data.AppointmentTime if time_changed else appointment.AppointmentTime
+        
+        # If date or time changed, validate doctor schedule and find/create new slot
+        new_dcid = appointment.DCID
+        if date_changed or time_changed:
+            # Validate doctor schedule
+            schedule_valid, schedule_message, slot_duration = check_doctor_schedule_enhanced(
+                db, appointment.doctor_id, appointment.facility_id,
+                new_date, new_time
+            )
+            
+            if not schedule_valid:
+                raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
+            
+            slot_duration_minutes = slot_duration if slot_duration else 15
+            
+            # Validate no conflict with patient's other appointments
+            is_valid, validation_error = validate_appointment_constraints(
+                db, appointment.patient_id, appointment.doctor_id, 
+                appointment.facility_id, new_date, new_time
+            )
+            
+            if not is_valid:
+                raise HTTPException(400, f"Appointment validation failed: {validation_error}")
+            
+            # Find or create new slot
+            slot_dcid, error_message = find_or_create_available_slot(
+                db, appointment.doctor_id, appointment.facility_id,
+                new_date, new_time, slot_duration_minutes
+            )
+            
+            if not slot_dcid:
+                raise HTTPException(400, f"Slot booking failed: {error_message}")
+            
+            # Release old slot
+            old_dcid = appointment.DCID
+            if old_dcid != slot_dcid:
+                update_slot_booking_status(db, old_dcid, "Not Booked")
+                new_dcid = slot_dcid
+        
+        # Update appointment fields
+        if date_changed:
+            appointment.AppointmentDate = new_date
+        if time_changed:
+            appointment.AppointmentTime = new_time
+        if mode_changed:
+            appointment.AppointmentMode = update_data.AppointmentMode
+        if new_dcid != appointment.DCID:
+            appointment.DCID = new_dcid
+        
+        db.commit()
+        db.refresh(appointment)
+        
+        # Fetch patient details
+        patient = db.query(model.Patients).filter(
+            model.Patients.id == appointment.patient_id
+        ).first()
+        
+        full_name = f"{patient.firstname} {patient.lastname}".strip()
+        patient_dict = {
+            "id": patient.id,
+            "name": full_name,
+            "contact_number": patient.contact_number,
+            "age": patient.age,
+            "address": patient.address,
+            "gender": patient.gender,
+            "email_id": getattr(patient, 'email_id', None),
+            "disease": getattr(patient, 'disease', None),
+            "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None)
+        }
+        
+        appointment_response = AppointmentResponse(
+            AppointmentID=appointment.appointment_id,
+            patient_id=appointment.patient_id,
+            doctor_id=appointment.doctor_id,
+            facility_id=appointment.facility_id,
+            DCID=appointment.DCID,
+            AppointmentDate=appointment.AppointmentDate,
+            AppointmentTime=appointment.AppointmentTime,
+            Reason=appointment.Reason,
+            AppointmentMode=appointment.AppointmentMode,
+            CheckinTime=appointment.CheckinTime,
+            Cancelled=appointment.Cancelled,
+            TokenID=appointment.TokenID,
+            AppointmentStatus=appointment.AppointmentStatus,
+            payment_method=appointment.payment_method
+        )
+        
+        changes = []
+        if date_changed:
+            changes.append("date")
+        if time_changed:
+            changes.append("time")
+        if mode_changed:
+            changes.append("mode")
+        
+        success_message = f"Appointment updated successfully. Changed: {', '.join(changes)}"
+        
+        return DashboardAppointmentResponse(
+            appointment=appointment_response,
+            patient=patient_dict,
+            is_new_patient=False,
+            message=success_message
+        )
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error updating appointment: {str(e)}")
+
+
+    
