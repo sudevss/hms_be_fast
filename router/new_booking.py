@@ -896,6 +896,10 @@ def update_appointment(
         if appointment.Cancelled:
             raise HTTPException(400, "Cannot update a cancelled appointment")
         
+        # ✅ FIX 1: Add check-in validation
+        if appointment.CheckinTime:
+            raise HTTPException(400, "Cannot update an appointment that has already been checked in")
+        
         # Determine what needs to be updated
         date_changed = update_data.AppointmentDate and update_data.AppointmentDate != appointment.AppointmentDate
         time_changed = update_data.AppointmentTime and update_data.AppointmentTime != appointment.AppointmentTime
@@ -907,8 +911,11 @@ def update_appointment(
         new_date = update_data.AppointmentDate if date_changed else appointment.AppointmentDate
         new_time = update_data.AppointmentTime if time_changed else appointment.AppointmentTime
         
+        # Store old DCID for potential release
+        old_dcid = appointment.DCID
+        new_dcid = old_dcid
+        
         # If date or time changed, validate doctor schedule and find/create new slot
-        new_dcid = appointment.DCID
         if date_changed or time_changed:
             # Validate doctor schedule
             schedule_valid, schedule_message, slot_duration = check_doctor_schedule_enhanced(
@@ -921,14 +928,17 @@ def update_appointment(
             
             slot_duration_minutes = slot_duration if slot_duration else 15
             
-            # Validate no conflict with patient's other appointments
-            is_valid, validation_error = validate_appointment_constraints(
-                db, appointment.patient_id, appointment.doctor_id, 
-                appointment.facility_id, new_date, new_time
-            )
+            # ✅ FIX 2: Better overlap validation (exclude current appointment)
+            overlapping = db.query(model.Appointment).filter(
+                model.Appointment.patient_id == appointment.patient_id,
+                model.Appointment.AppointmentDate == new_date,
+                model.Appointment.AppointmentTime == new_time,
+                model.Appointment.Cancelled == False,
+                model.Appointment.appointment_id != appointment_id  # Exclude current appointment
+            ).first()
             
-            if not is_valid:
-                raise HTTPException(400, f"Appointment validation failed: {validation_error}")
+            if overlapping:
+                raise HTTPException(400, "Patient already has an appointment at this time")
             
             # Find or create new slot
             slot_dcid, error_message = find_or_create_available_slot(
@@ -939,11 +949,13 @@ def update_appointment(
             if not slot_dcid:
                 raise HTTPException(400, f"Slot booking failed: {error_message}")
             
-            # Release old slot
-            old_dcid = appointment.DCID
-            if old_dcid != slot_dcid:
-                update_slot_booking_status(db, old_dcid, "Not Booked")
-                new_dcid = slot_dcid
+            new_dcid = slot_dcid
+            
+            # Release old slot only if it's different from the new slot
+            if old_dcid != new_dcid:
+                success, error = update_slot_booking_status(db, old_dcid, "Not Booked")
+                if not success:
+                    raise HTTPException(500, f"Failed to release old slot: {error}")
         
         # Update appointment fields
         if date_changed:
@@ -951,8 +963,9 @@ def update_appointment(
         if time_changed:
             appointment.AppointmentTime = new_time
         if mode_changed:
-            appointment.AppointmentMode = update_data.AppointmentMode
-        if new_dcid != appointment.DCID:
+            # ✅ FIX 3: Ensure uppercase consistency
+            appointment.AppointmentMode = update_data.AppointmentMode.upper()
+        if new_dcid != old_dcid:
             appointment.DCID = new_dcid
         
         db.commit()
@@ -962,6 +975,9 @@ def update_appointment(
         patient = db.query(model.Patients).filter(
             model.Patients.id == appointment.patient_id
         ).first()
+        
+        if not patient:
+            raise HTTPException(404, "Patient not found")
         
         full_name = f"{patient.firstname} {patient.lastname}".strip()
         patient_dict = {
@@ -995,11 +1011,11 @@ def update_appointment(
         
         changes = []
         if date_changed:
-            changes.append("date")
+            changes.append(f"date to {new_date}")
         if time_changed:
-            changes.append("time")
+            changes.append(f"time to {new_time.strftime('%H:%M')}")
         if mode_changed:
-            changes.append("mode")
+            changes.append(f"mode to {update_data.AppointmentMode}")
         
         success_message = f"Appointment updated successfully. Changed: {', '.join(changes)}"
         
@@ -1016,6 +1032,4 @@ def update_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error updating appointment: {str(e)}")
-
-
     
