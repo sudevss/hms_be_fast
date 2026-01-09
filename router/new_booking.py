@@ -218,6 +218,47 @@ def validate_appointment_constraints(db: Session, patient_id: int, doctor_id: in
     except Exception as e:
         return False, f"Error validating appointment constraints: {str(e)}"
 
+def check_recent_appointments(db: Session, patient_id: int, facility_id: int, days: int = 7) -> tuple[bool, Optional[dict]]:
+    """
+    Check if patient has any appointments in the last N days.
+    Returns (has_recent_appointment, most_recent_appointment_info)
+    """
+    try:
+        cutoff_date = date.today() - timedelta(days=days)
+        
+        recent_appointment = db.query(model.Appointment).filter(
+            model.Appointment.patient_id == patient_id,
+            model.Appointment.facility_id == facility_id,
+            model.Appointment.AppointmentDate >= cutoff_date,
+            model.Appointment.AppointmentDate <= date.today(),
+            model.Appointment.Cancelled == False
+        ).order_by(model.Appointment.AppointmentDate.desc()).first()
+        
+        if recent_appointment:
+            # Get doctor details
+            doctor = db.query(model.Doctors).filter(
+                model.Doctors.id == recent_appointment.doctor_id
+            ).first()
+            
+            doctor_name = f"Dr. {doctor.firstname} {doctor.lastname}" if doctor else "Unknown Doctor"
+            
+            appointment_info = {
+                "appointment_id": recent_appointment.appointment_id,
+                "date": recent_appointment.AppointmentDate.isoformat(),
+                "time": recent_appointment.AppointmentTime.strftime("%H:%M"),
+                "doctor": doctor_name,
+                "reason": recent_appointment.Reason,
+                "days_ago": (date.today() - recent_appointment.AppointmentDate).days
+            }
+            
+            return True, appointment_info
+        
+        return False, None
+        
+    except Exception as e:
+        # If there's an error checking, return False to not block booking
+        return False, None
+
 # -------------------- Pydantic Models --------------------
 
 class PatientInfo(BaseModel):
@@ -283,6 +324,7 @@ class DashboardAppointmentCreate(BaseModel):
     room_id: Optional[int] = 1
     payment_status: Optional[int] = 0
     payment_method: Optional[str] = "Cash"
+    is_review: Optional[bool] = False  # NEW: Review checkbox
 
     class Config:
         schema_extra = {
@@ -307,7 +349,8 @@ class DashboardAppointmentCreate(BaseModel):
                 "AppointmentMode": "A",
                 "room_id": 0,
                 "payment_status": 0,
-                "payment_method": "Cash"
+                "payment_method": "Cash",
+                "is_review": False
             }
         }
 
@@ -357,6 +400,7 @@ class AppointmentResponse(BaseModel):
     TokenID: Optional[str] = None
     AppointmentStatus: Optional[str] = None
     payment_method: Optional[str] = None
+    is_review: Optional[bool] = False  # NEW: Review flag in response
     
 
 class DashboardAppointmentResponse(BaseModel):
@@ -380,6 +424,8 @@ class PatientDetails(BaseModel):
     ABDM_ABHA_id: Optional[str] = None
     facility_id: int
     recent_appointments: List[dict] = []
+    has_recent_appointment: Optional[bool] = False  # NEW: Flag for recent appointments
+    most_recent_appointment: Optional[dict] = None  # NEW: Most recent appointment info
 
 class PatientLookupResponse(BaseModel):
     exists: bool
@@ -402,6 +448,7 @@ class QuickAppointmentCreate(BaseModel):
     room_id: Optional[int] = 1
     payment_status: Optional[int] = 0
     payment_method: Optional[str] = "Cash"
+    is_review: Optional[bool] = False  # NEW: Review checkbox
 
     class Config:
         schema_extra = {
@@ -415,7 +462,8 @@ class QuickAppointmentCreate(BaseModel):
                 "AppointmentMode": "A",
                 "room_id": 1,
                 "payment_status": 0,
-                "payment_method": "Cash"
+                "payment_method": "Cash",
+                "is_review": False
             }
         }
 
@@ -495,7 +543,7 @@ def dashboard_book_appointment(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Enhanced Dashboard API: Books appointment with proper validation flow (Requires Authentication)"""
+    """Enhanced Dashboard API: Books appointment with proper validation flow and review support (Requires Authentication)"""
     try:
         # Determine effective facility_id based on user role
         facility_id = get_effective_facility_id(current_user, booking_data.facility_id)
@@ -592,6 +640,10 @@ def dashboard_book_appointment(
             payment_method=booking_data.payment_method
         )
         
+        # NEW: Add is_review field if it exists in the model
+        if hasattr(model.Appointment, 'is_review'):
+            new_appointment.is_review = booking_data.is_review
+        
         db.add(new_appointment)
         update_slot_booking_status(db, slot_dcid)
         db.commit()
@@ -611,12 +663,14 @@ def dashboard_book_appointment(
             Cancelled=new_appointment.Cancelled,
             TokenID=new_appointment.TokenID,
             AppointmentStatus=new_appointment.AppointmentStatus,
-            payment_method=new_appointment.payment_method
+            payment_method=new_appointment.payment_method,
+            is_review=booking_data.is_review
         )
         
         payment_msg = "paid" if booking_data.payment_status == 1 else "unpaid"
         payment_method_msg = f"via {booking_data.payment_method}"
-        success_message = f"New patient created and appointment booked successfully ({payment_msg} {payment_method_msg})"
+        review_msg = " (Review appointment)" if booking_data.is_review else ""
+        success_message = f"New patient created and appointment booked successfully ({payment_msg} {payment_method_msg}){review_msg}"
         
         return DashboardAppointmentResponse(
             appointment=appointment_response,
@@ -640,7 +694,7 @@ def dashboard_patient_lookup(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lookup ALL patients registered with the same phone number (Requires Authentication)"""
+    """Lookup ALL patients registered with the same phone number with recent appointment check (Requires Authentication)"""
     try:
         # Determine effective facility_id based on user role
         effective_facility_id = get_effective_facility_id(current_user, facility_id)
@@ -668,6 +722,9 @@ def dashboard_patient_lookup(
                 ).order_by(model.Appointment.AppointmentDate.desc()).limit(10).all()
             except Exception:
                 recent_appointments = []
+            
+            # NEW: Check for recent appointments in last 7 days
+            has_recent, recent_info = check_recent_appointments(db, patient.id, effective_facility_id, days=7)
             
             appointment_history = []
             for apt in recent_appointments:
@@ -719,7 +776,9 @@ def dashboard_patient_lookup(
                 disease=getattr(patient, 'disease', None),
                 ABDM_ABHA_id=getattr(patient, 'ABDM_ABHA_id', None),
                 facility_id=patient.facility_id,
-                recent_appointments=appointment_history
+                recent_appointments=appointment_history,
+                has_recent_appointment=has_recent,  # NEW
+                most_recent_appointment=recent_info  # NEW
             ))
         
         total = len(patients)
@@ -750,7 +809,7 @@ def book_appointment_for_existing_patient(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Enhanced Quick booking for existing patients using patient_id (Requires Authentication)"""
+    """Enhanced Quick booking for existing patients using patient_id with review support (Requires Authentication)"""
     try:
         # Determine effective facility_id based on user role
         facility_id = get_effective_facility_id(current_user, booking_data.facility_id)
@@ -783,6 +842,12 @@ def book_appointment_for_existing_patient(
         
         if not existing_patient:
             raise HTTPException(404, f"Patient with ID {booking_data.patient_id} not found in facility {facility_id}")
+        
+        # NEW: Validate review checkbox - should only be enabled if there's an appointment in last 7 days
+        if booking_data.is_review:
+            has_recent, recent_info = check_recent_appointments(db, booking_data.patient_id, facility_id, days=7)
+            if not has_recent:
+                raise HTTPException(400, "Review checkbox can only be selected if there is an appointment in the last 7 days")
         
         is_valid, validation_error = validate_appointment_constraints(
             db, booking_data.patient_id, booking_data.doctor_id, facility_id,
@@ -830,6 +895,10 @@ def book_appointment_for_existing_patient(
             payment_method=booking_data.payment_method
         )
         
+        # NEW: Add is_review field if it exists in the model
+        if hasattr(model.Appointment, 'is_review'):
+            new_appointment.is_review = booking_data.is_review
+        
         db.add(new_appointment)
         update_slot_booking_status(db, slot_dcid)
         db.commit()
@@ -849,12 +918,14 @@ def book_appointment_for_existing_patient(
             Cancelled=new_appointment.Cancelled,
             TokenID=new_appointment.TokenID,
             AppointmentStatus=new_appointment.AppointmentStatus,
-            payment_method=new_appointment.payment_method
+            payment_method=new_appointment.payment_method,
+            is_review=booking_data.is_review
         )
         
         payment_msg = "paid" if booking_data.payment_status == 1 else "unpaid"
         payment_method_msg = f"via {booking_data.payment_method}"
-        success_message = f"Appointment booked for existing patient successfully ({payment_msg} {payment_method_msg})"
+        review_msg = " (Review appointment)" if booking_data.is_review else ""
+        success_message = f"Appointment booked for existing patient successfully ({payment_msg} {payment_method_msg}){review_msg}"
         
         return DashboardAppointmentResponse(
             appointment=appointment_response,
@@ -992,6 +1063,9 @@ def update_appointment(
             "ABDM_ABHA_id": getattr(patient, 'ABDM_ABHA_id', None)
         }
         
+        # Get is_review value if it exists
+        is_review_value = getattr(appointment, 'is_review', False) if hasattr(appointment, 'is_review') else False
+        
         appointment_response = AppointmentResponse(
             AppointmentID=appointment.appointment_id,
             patient_id=appointment.patient_id,
@@ -1006,7 +1080,8 @@ def update_appointment(
             Cancelled=appointment.Cancelled,
             TokenID=appointment.TokenID,
             AppointmentStatus=appointment.AppointmentStatus,
-            payment_method=appointment.payment_method
+            payment_method=appointment.payment_method,
+            is_review=is_review_value
         )
         
         changes = []
@@ -1032,4 +1107,3 @@ def update_appointment(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error updating appointment: {str(e)}")
-    
