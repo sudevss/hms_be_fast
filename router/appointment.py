@@ -455,6 +455,8 @@ class AppointmentResponse(BaseModel):
     payment_method: Optional[str] = None
     payment_comments: Optional[str] = None
     diagnosis_id: Optional[int] = None
+    is_review: Optional[bool] = False  # Review flag
+    
     class Config:
         from_attributes = True
 
@@ -750,7 +752,8 @@ def get_all_appointments(
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
             "payment_method": appointment.payment_method,
             "payment_comments": appointment.payment_comments,
-            "diagnosis_id": diagnosis_id
+            "diagnosis_id": diagnosis_id,
+            "is_review": getattr(appointment, 'is_review', False)
         }))
     
     return formatted_results
@@ -814,7 +817,8 @@ def get_appointment(
         "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
         "payment_method": appointment.payment_method,
         "payment_comments": appointment.payment_comments,
-        "diagnosis_id": diagnosis_id
+        "diagnosis_id": diagnosis_id,
+        "is_review": getattr(appointment, 'is_review', False)
     })
 
 
@@ -946,6 +950,10 @@ def update_payment_status(
         raise HTTPException(status_code=400, detail="Patient must be checked in before payment")
     if appt.Cancelled:
         raise HTTPException(status_code=400, detail="Cannot process payment for cancelled appointment")
+    
+    # If this is a review appointment, payment is waived
+    if getattr(appt, 'is_review', False):
+        raise HTTPException(status_code=400, detail="Payment is waived for review appointments")
 
     try:
         patient = db.query(Patients).filter(Patients.id == appt.patient_id).first()
@@ -1208,7 +1216,8 @@ def get_patient_appointments(
             "consultation_fee": float(doctor_consultation_fee) if doctor_consultation_fee else None,
             "payment_method": appointment.payment_method,
             "payment_comments": appointment.payment_comments,
-            "diagnosis_id": diagnosis_id
+            "diagnosis_id": diagnosis_id,
+            "is_review": getattr(appointment, 'is_review', False)
         }))
     
     return formatted_results
