@@ -189,6 +189,7 @@ class Appointment(Base):
     TokenID = Column(String(20))
     AppointmentMode = Column(String(50), nullable=False)
     AppointmentStatus = Column(String(50), nullable=False, default="Scheduled")
+    is_review = Column(Boolean, default=False, nullable=True)
 
     # Relationships
     patient = relationship("Patients", back_populates="appointments")
@@ -230,20 +231,7 @@ class MedicalRecord(Base):
     appointment = relationship("Appointment")
     facility = relationship("Facility")
 
-class Billing(Base):
-    __tablename__ = "billing"
 
-    bill_id = Column(Integer, primary_key=True, index=True)
-    appointment_id = Column(Integer, ForeignKey("appointment.appointment_id"), nullable=False)
-    Amount = Column(Integer, nullable=False)
-    BillDate = Column(DateTime, default=func.now())
-    PaymentStatus = Column(String(20), nullable=False)
-    PaymentMode = Column(String(100))
-    TransactionID = Column(String(50))
-    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
-
-    appointment = relationship("Appointment")
-    facility = relationship("Facility")
 
 class MedicalDocument(Base):
     __tablename__ = "medical_document"
@@ -706,4 +694,3 @@ class HMSParams(Base):
         Index("idx_hms_params_name", "param_name"),
         CheckConstraint("LENGTH(param_name) >= 2", name="chk_param_name_length"),
     )
-    
