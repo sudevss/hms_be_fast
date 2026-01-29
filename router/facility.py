@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, File, UploadFile, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 from database import get_db
 from model import Facility
 from auth_middleware import get_current_user, require_admin_role, CurrentUser
+import io
 
 router = APIRouter(
     prefix="/facility",
@@ -33,23 +35,54 @@ def successful_response(status_code: int):
 def get_notfound_exception():
     return HTTPException(status_code=404, detail="Facility not found")
 
+def get_effective_facility_id(current_user: CurrentUser, facility_id: Optional[int]) -> int:
+    """
+    Determine the effective facility_id based on user role
+    - Super Admin: Use provided facility_id parameter
+    - Regular User: Always use facility_id from token
+    """
+    if current_user.is_super_admin():
+        if facility_id is None:
+            raise HTTPException(status_code=400, detail="facility_id is required")
+        return facility_id
+    else:
+        # Regular user - always use facility_id from token, ignore parameter
+        return current_user.facility_id
+
 @router.get("/", response_model=List[FacilityResponse])
 def get_all_facilities(
     current_user: CurrentUser = Depends(get_current_user),
+    facility_id: Optional[int] = Query(None, description="Facility ID to filter facilities"),
     db: Session = Depends(get_db)
 ):
-    return db.query(Facility).all()
+    try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        return db.query(Facility).filter(Facility.facility_id == effective_facility_id).all()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving facilities: {str(e)}")
 
-@router.get("/{facility_id}", response_model=FacilityResponse)
+@router.get("/detail", response_model=FacilityResponse)
 def get_facility(
-    facility_id: int,
     current_user: CurrentUser = Depends(get_current_user),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
-    facility = db.query(Facility).filter(Facility.facility_id == facility_id).first()
-    if not facility:
-        raise HTTPException(status_code=404, detail="Facility not found")
-    return facility
+    try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        facility = db.query(Facility).filter(Facility.facility_id == effective_facility_id).first()
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
+        return facility
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving facility: {str(e)}")
 
 @router.post("/", response_model=FacilityResponse)
 def create_facility(
@@ -63,17 +96,20 @@ def create_facility(
     db.refresh(new_facility)
     return new_facility
 
-@router.api_route("/{facility_id}", methods=["PATCH"], tags=["Facility"])
+@router.api_route("/update", methods=["PATCH"], tags=["Facility"])
 async def update_facility(
-    facility_id: int,
     facility: FacilityUpdateSchema = None,
     background_tasks: BackgroundTasks = None,
     current_user: CurrentUser = Depends(require_admin_role),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
     try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
         existing_facility = db.query(Facility).filter(
-            Facility.facility_id == facility_id
+            Facility.facility_id == effective_facility_id
         ).first()
         
         if not existing_facility:
@@ -118,15 +154,163 @@ async def update_facility(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.delete("/{facility_id}")
+@router.delete("/delete")
 def delete_facility(
-    facility_id: int,
     current_user: CurrentUser = Depends(require_admin_role),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
     db: Session = Depends(get_db)
 ):
-    facility = db.query(Facility).filter(Facility.facility_id == facility_id).first()
-    if not facility:
-        raise HTTPException(status_code=404, detail="Facility not found")
-    db.delete(facility)
-    db.commit()
-    return {"detail": "Facility deleted successfully"}
+    try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        facility = db.query(Facility).filter(Facility.facility_id == effective_facility_id).first()
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
+        db.delete(facility)
+        db.commit()
+        return {"detail": "Facility deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting facility: {str(e)}")
+
+@router.post("/logo")
+async def upload_facility_logo(
+    logo: UploadFile = File(...),
+    current_user: CurrentUser = Depends(require_admin_role),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload a logo for a facility
+    Accepts image files (png, jpg, jpeg, gif, svg)
+    """
+    try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        # Validate facility exists
+        facility = db.query(Facility).filter(Facility.facility_id == effective_facility_id).first()
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
+        
+        # Validate file type
+        allowed_extensions = {".png", ".jpg", ".jpeg", ".gif", ".svg"}
+        file_ext = logo.filename.lower()[logo.filename.rfind("."):]
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}"
+            )
+        
+        # Read file content
+        logo_content = await logo.read()
+        
+        # Validate file size (max 5MB)
+        if len(logo_content) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File size too large. Maximum 5MB allowed")
+        
+        # Update facility with logo
+        facility.logo_filename = logo.filename
+        facility.logo_blob = logo_content
+        
+        db.commit()
+        
+        return {
+            "status_code": 200,
+            "message": "Logo uploaded successfully",
+            "filename": logo.filename
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error uploading logo: {str(e)}")
+
+@router.get("/logo")
+def get_facility_logo(
+    current_user: CurrentUser = Depends(get_current_user),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
+    db: Session = Depends(get_db)
+):
+    """
+    Download the logo for a facility
+    Returns the image file
+    """
+    try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        facility = db.query(Facility).filter(Facility.facility_id == effective_facility_id).first()
+    
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
+        
+        if not facility.logo_blob or not facility.logo_filename:
+            raise HTTPException(status_code=404, detail="No logo found for this facility")
+        
+        # Determine media type from filename
+        file_ext = facility.logo_filename.lower()[facility.logo_filename.rfind("."):]
+        media_type_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".svg": "image/svg+xml"
+        }
+        
+        media_type = media_type_map.get(file_ext, "application/octet-stream")
+        
+        # Return image as streaming response
+        return StreamingResponse(
+            io.BytesIO(facility.logo_blob),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f"inline; filename={facility.logo_filename}"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving logo: {str(e)}")
+
+@router.delete("/logo")
+def delete_facility_logo(
+    current_user: CurrentUser = Depends(require_admin_role),
+    facility_id: Optional[int] = Query(None, description="Facility ID"),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete the logo for a facility
+    """
+    try:
+        # Get effective facility_id based on user role
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        facility = db.query(Facility).filter(Facility.facility_id == effective_facility_id).first()
+        
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
+        
+        if not facility.logo_blob:
+            raise HTTPException(status_code=404, detail="No logo found for this facility")
+        
+        facility.logo_filename = None
+        facility.logo_blob = None
+        
+        db.commit()
+        
+        return {
+            "status_code": 200,
+            "message": "Logo deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting logo: {str(e)}")

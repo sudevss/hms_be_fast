@@ -1,6 +1,6 @@
 
 from sqlalchemy.orm import relationship
-from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean, Numeric, func, CheckConstraint, Index, UniqueConstraint, Text
+from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Time, Boolean, Numeric, func, CheckConstraint, Index, UniqueConstraint, Text,LargeBinary
 from database import Base
 import sqlalchemy as sa
 
@@ -12,6 +12,9 @@ class Facility(Base):
     FacilityAddress = Column(String(500))
     ABDM_NHFR_ID = Column(String(100))
     TaxNumber = Column(String(50))
+    # Logo fields
+    logo_filename = Column(String(255))
+    logo_blob = Column(LargeBinary)
 
     # Relationships
     users = relationship("UserMaster", back_populates="facility")
@@ -694,3 +697,214 @@ class HMSParams(Base):
         Index("idx_hms_params_name", "param_name"),
         CheckConstraint("LENGTH(param_name) >= 2", name="chk_param_name_length"),
     )
+# ==================== BILLING TABLES ====================
+# Add these classes to model.py before the last line
+
+class LabBill(Base):
+    """Lab test bills"""
+    __tablename__ = "lab_bill"
+    
+    lab_bill_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    bill_date = Column(Date, nullable=False, default=func.current_date())
+    subtotal = Column(Numeric(10, 2), nullable=False)
+    discount_percent = Column(Numeric(5, 2), default=0)
+    total_amount = Column(Numeric(10, 2), nullable=False)
+    paid_amount = Column(Numeric(10, 2), default=0)
+    payment_status = Column(String(20), default='Pending')  # Pending, Partial, Paid
+    payment_method = Column(String(50))
+    payment_date = Column(DateTime)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis")
+    patient = relationship("Patients")
+    items = relationship("LabBillItem", back_populates="lab_bill", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_lab_bill_diagnosis", "diagnosis_id"),
+        Index("idx_lab_bill_patient", "patient_id"),
+        Index("idx_lab_bill_date", "bill_date"),
+        Index("idx_lab_bill_status", "payment_status"),
+        CheckConstraint("payment_status IN ('Pending','Partial','Paid')", name="chk_lab_payment_status"),
+        CheckConstraint("subtotal >= 0", name="chk_lab_subtotal_positive"),
+        CheckConstraint("total_amount >= 0", name="chk_lab_total_positive"),
+        CheckConstraint("paid_amount >= 0", name="chk_lab_paid_positive"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_lab_discount_range"),
+    )
+
+
+class LabBillItem(Base):
+    """Individual items in a lab bill"""
+    __tablename__ = "lab_bill_item"
+    
+    lab_bill_item_id = Column(Integer, primary_key=True, index=True)
+    lab_bill_id = Column(Integer, ForeignKey("lab_bill.lab_bill_id", ondelete="CASCADE"), nullable=False)
+    test_id = Column(Integer, ForeignKey("lab_master.test_id"), nullable=False)
+    test_name = Column(String(255), nullable=False)
+    remarks = Column(Text)  # e.g., "Empty Stomach"
+    price = Column(Numeric(10, 2), nullable=False)
+    discount_percent = Column(Numeric(5, 2), default=0)
+    final_price = Column(Numeric(10, 2), nullable=False)
+    
+    # Relationships
+    lab_bill = relationship("LabBill", back_populates="items")
+    test = relationship("LabMaster")
+    
+    __table_args__ = (
+        Index("idx_lab_bill_item", "lab_bill_id", "test_id"),
+        CheckConstraint("price >= 0", name="chk_lab_item_price_positive"),
+        CheckConstraint("final_price >= 0", name="chk_lab_item_final_positive"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_lab_item_discount_range"),
+    )
+
+
+class PharmacyBill(Base):
+    """Pharmacy/medicine bills"""
+    __tablename__ = "pharmacy_bill"
+    
+    pharmacy_bill_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    bill_date = Column(Date, nullable=False, default=func.current_date())
+    subtotal = Column(Numeric(10, 2), nullable=False)
+    discount_percent = Column(Numeric(5, 2), default=0)
+    total_amount = Column(Numeric(10, 2), nullable=False)
+    paid_amount = Column(Numeric(10, 2), default=0)
+    payment_status = Column(String(20), default='Pending')  # Pending, Partial, Paid
+    payment_method = Column(String(50))
+    payment_date = Column(DateTime)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis")
+    patient = relationship("Patients")
+    items = relationship("PharmacyBillItem", back_populates="pharmacy_bill", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_pharmacy_bill_diagnosis", "diagnosis_id"),
+        Index("idx_pharmacy_bill_patient", "patient_id"),
+        Index("idx_pharmacy_bill_date", "bill_date"),
+        Index("idx_pharmacy_bill_status", "payment_status"),
+        CheckConstraint("payment_status IN ('Pending','Partial','Paid')", name="chk_pharmacy_payment_status"),
+        CheckConstraint("subtotal >= 0", name="chk_pharmacy_subtotal_positive"),
+        CheckConstraint("total_amount >= 0", name="chk_pharmacy_total_positive"),
+        CheckConstraint("paid_amount >= 0", name="chk_pharmacy_paid_positive"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_pharmacy_discount_range"),
+    )
+
+
+class PharmacyBillItem(Base):
+    """Individual items in a pharmacy bill"""
+    __tablename__ = "pharmacy_bill_item"
+    
+    pharmacy_bill_item_id = Column(Integer, primary_key=True, index=True)
+    pharmacy_bill_id = Column(Integer, ForeignKey("pharmacy_bill.pharmacy_bill_id", ondelete="CASCADE"), nullable=False)
+    medicine_id = Column(Integer, ForeignKey("drug_master.medicine_id"), nullable=False)
+    medicine_name = Column(String(255), nullable=False)
+    generic_name = Column(String(255))
+    strength = Column(String(100))
+    quantity = Column(Integer, nullable=False)
+    unit_price = Column(Numeric(10, 2), nullable=False)
+    total_price = Column(Numeric(10, 2), nullable=False)
+    discount_percent = Column(Numeric(5, 2), default=0)
+    final_price = Column(Numeric(10, 2), nullable=False)
+    
+    # Dosage information
+    dosage_info = Column(String(50))  # e.g., "M-A-N" (Morning-Afternoon-Night)
+    food_timing = Column(String(50))  # e.g., "After Food"
+    duration_days = Column(Integer)
+    
+    # Relationships
+    pharmacy_bill = relationship("PharmacyBill", back_populates="items")
+    medicine = relationship("DrugMaster")
+    
+    __table_args__ = (
+        Index("idx_pharmacy_bill_item", "pharmacy_bill_id", "medicine_id"),
+        CheckConstraint("quantity > 0", name="chk_pharmacy_item_quantity_positive"),
+        CheckConstraint("unit_price >= 0", name="chk_pharmacy_item_price_positive"),
+        CheckConstraint("total_price >= 0", name="chk_pharmacy_item_total_positive"),
+        CheckConstraint("final_price >= 0", name="chk_pharmacy_item_final_positive"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_pharmacy_item_discount_range"),
+        CheckConstraint("duration_days IS NULL OR duration_days > 0", name="chk_pharmacy_item_duration_positive"),
+    )
+
+
+class ProcedureBill(Base):
+    """Procedure bills"""
+    __tablename__ = "procedure_bill"
+    
+    procedure_bill_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    bill_date = Column(Date, nullable=False, default=func.current_date())
+    subtotal = Column(Numeric(10, 2), nullable=False)
+    discount_percent = Column(Numeric(5, 2), default=0)
+    total_amount = Column(Numeric(10, 2), nullable=False)
+    paid_amount = Column(Numeric(10, 2), default=0)
+    payment_status = Column(String(20), default='Pending')  # Pending, Partial, Paid
+    payment_method = Column(String(50))
+    payment_date = Column(DateTime)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    
+    # Relationships
+    facility = relationship("Facility")
+    diagnosis = relationship("PatientDiagnosis")
+    patient = relationship("Patients")
+    items = relationship("ProcedureBillItem", back_populates="procedure_bill", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_procedure_bill_diagnosis", "diagnosis_id"),
+        Index("idx_procedure_bill_patient", "patient_id"),
+        Index("idx_procedure_bill_date", "bill_date"),
+        Index("idx_procedure_bill_status", "payment_status"),
+        CheckConstraint("payment_status IN ('Pending','Partial','Paid')", name="chk_procedure_payment_status"),
+        CheckConstraint("subtotal >= 0", name="chk_procedure_subtotal_positive"),
+        CheckConstraint("total_amount >= 0", name="chk_procedure_total_positive"),
+        CheckConstraint("paid_amount >= 0", name="chk_procedure_paid_positive"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_procedure_discount_range"),
+    )
+
+
+class ProcedureBillItem(Base):
+    """Individual items in a procedure bill"""
+    __tablename__ = "procedure_bill_item"
+    
+    procedure_bill_item_id = Column(Integer, primary_key=True, index=True)
+    procedure_bill_id = Column(Integer, ForeignKey("procedure_bill.procedure_bill_id", ondelete="CASCADE"), nullable=False)
+    procedure_text = Column(Text, nullable=False)
+    price = Column(Numeric(10, 2), nullable=False)
+    discount_percent = Column(Numeric(5, 2), default=0)
+    final_price = Column(Numeric(10, 2), nullable=False)
+    
+    # Relationships
+    procedure_bill = relationship("ProcedureBill", back_populates="items")
+    
+    __table_args__ = (
+        Index("idx_procedure_bill_item", "procedure_bill_id"),
+        CheckConstraint("price >= 0", name="chk_procedure_item_price_positive"),
+        CheckConstraint("final_price >= 0", name="chk_procedure_item_final_positive"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_procedure_item_discount_range"),
+        CheckConstraint("LENGTH(procedure_text) >= 5", name="chk_procedure_item_text_length"),
+    )    

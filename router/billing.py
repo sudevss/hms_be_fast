@@ -1,4 +1,3 @@
-
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime
 from pydantic import BaseModel, Field
@@ -24,10 +23,14 @@ def get_db():
     finally:
         db.close()
 
-def get_effective_facility_id(current_user: CurrentUser, facility_id: Optional[int] = None) -> int:
-    """Determine the effective facility_id based on user role"""
-    if current_user.is_super_admin:
-        return facility_id if facility_id is not None else current_user.facility_id
+def get_effective_facility_id(current_user: CurrentUser, requested_facility_id: Optional[int]) -> int:
+    """
+    Determine the effective facility_id based on user role.
+    - Super Admin: Use requested_facility_id if provided, otherwise use token facility_id
+    - Regular User: Always use token facility_id (ignore requested_facility_id)
+    """
+    if current_user.role == "Super Admin":
+        return requested_facility_id if requested_facility_id is not None else current_user.facility_id
     else:
         return current_user.facility_id
 
@@ -103,6 +106,7 @@ class CreateBillRequest(BaseModel):
     """Request to create bills for lab/pharmacy/procedures"""
     diagnosis_id: int
     facility_id: Optional[int] = None
+    appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
     
     # Lab bill
     lab_items: List[LabBillItem] = Field(default_factory=list)
@@ -121,6 +125,7 @@ class CreateBillRequest(BaseModel):
             "example": {
                 "diagnosis_id": 123,
                 "facility_id": 1,
+                "appointment_id": None,
                 "lab_items": [
                     {
                         "test_id": 5,
@@ -261,7 +266,7 @@ def get_consultation_fee(db: Session, diagnosis_id: int) -> tuple[float, float]:
             model.Appointment.appointment_id == diagnosis.appointment_id
         ).first()
         
-        if appointment and appointment.payment_status:
+        if appointment and appointment.payment_status == 1:
             consultation_paid = consultation_fee
     
     return consultation_fee, consultation_paid
@@ -291,6 +296,14 @@ async def create_bills(
         
         if not diagnosis:
             raise HTTPException(status_code=404, detail="Diagnosis not found")
+        
+        # Validate appointment if provided
+        if request.appointment_id:
+            appointment = db.query(model.Appointment).filter(
+                model.Appointment.appointment_id == request.appointment_id
+            ).first()
+            if not appointment:
+                raise HTTPException(status_code=400, detail="Appointment not found")
         
         # Delete existing bills for this diagnosis (if recreating)
         db.query(model.LabBill).filter(
