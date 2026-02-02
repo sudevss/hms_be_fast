@@ -305,15 +305,18 @@ async def create_bills(
             if not appointment:
                 raise HTTPException(status_code=400, detail="Appointment not found")
         
-        # Delete existing bills for this diagnosis (if recreating)
+       # Delete existing bills for this diagnosis (if recreating)
         db.query(model.LabBill).filter(
-            model.LabBill.diagnosis_id == request.diagnosis_id
+            model.LabBill.diagnosis_id == request.diagnosis_id,
+            model.LabBill.facility_id == effective_facility_id
         ).delete()
         db.query(model.PharmacyBill).filter(
-            model.PharmacyBill.diagnosis_id == request.diagnosis_id
+            model.PharmacyBill.diagnosis_id == request.diagnosis_id,
+            model.PharmacyBill.facility_id == effective_facility_id
         ).delete()
         db.query(model.ProcedureBill).filter(
-            model.ProcedureBill.diagnosis_id == request.diagnosis_id
+            model.ProcedureBill.diagnosis_id == request.diagnosis_id,
+            model.ProcedureBill.facility_id == effective_facility_id
         ).delete()
         
         # Create Lab Bill
@@ -840,7 +843,7 @@ async def get_lab_print(
                 remarks=item.remarks,
                 price=float(item.price),
                 discount_percent=float(item.discount_percent),
-                final_price=float(item.final_price)
+                final_price=round(float(item.price) * (1 - float(item.discount_percent) / 100), 2)
             )
             for item in lab_bill.items
         ]
@@ -906,7 +909,7 @@ async def get_pharmacy_print(
                 unit_price=float(item.unit_price),
                 total_price=float(item.total_price),
                 discount_percent=float(item.discount_percent),
-                final_price=float(item.final_price),
+                final_price=round(float(item.total_price) * (1 - float(item.discount_percent) / 100), 2),
                 dosage_info=item.dosage_info,
                 food_timing=item.food_timing,
                 duration_days=item.duration_days
