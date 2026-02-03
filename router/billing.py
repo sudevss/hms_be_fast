@@ -233,6 +233,16 @@ class PharmacyPrintResponse(BaseModel):
     discount_percent: float
     total: float
 
+class ProcedurePrintResponse(BaseModel):
+    """Procedure bill print response"""
+    diagnosis_id: int
+    patient_name: str
+    date: date
+    items: List[ProcedureBillItem]
+    subtotal: float
+    discount_percent: float
+    total: float
+
 # ==================== HELPER FUNCTIONS ====================
 
 def calculate_final_price(price: float, discount_percent: float) -> float:
@@ -931,3 +941,64 @@ async def get_pharmacy_print(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting pharmacy print: {str(e)}")
+
+
+@router.get("/procedure-print/{diagnosis_id}", response_model=ProcedurePrintResponse)
+async def get_procedure_print(
+    diagnosis_id: int,
+    facility_id: Optional[int] = Query(None),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get procedure bill for printing"""
+    try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        # Get procedure bill with items
+        procedure_bill = db.query(model.ProcedureBill).options(
+            joinedload(model.ProcedureBill.items)
+        ).filter(
+            model.ProcedureBill.diagnosis_id == diagnosis_id,
+            model.ProcedureBill.facility_id == effective_facility_id
+        ).first()
+        
+        if not procedure_bill:
+            raise HTTPException(status_code=404, detail="Procedure bill not found")
+        
+        # Get patient info
+        diagnosis = db.query(model.PatientDiagnosis).join(
+            model.Patients, model.PatientDiagnosis.patient_id == model.Patients.id
+        ).filter(
+            model.PatientDiagnosis.diagnosis_id == diagnosis_id
+        ).first()
+        
+        patient = db.query(model.Patients).filter(
+            model.Patients.id == diagnosis.patient_id
+        ).first()
+        
+        patient_name = f"{patient.firstname} {patient.lastname}".strip() if patient else "Unknown"
+        
+        items = [
+            ProcedureBillItem(
+                procedure_text=item.procedure_text,
+                price=float(item.price),
+                discount_percent=float(item.discount_percent),
+                final_price=round(float(item.price) * (1 - float(item.discount_percent) / 100), 2)
+            )
+            for item in procedure_bill.items
+        ]
+        
+        return ProcedurePrintResponse(
+            diagnosis_id=diagnosis_id,
+            patient_name=patient_name,
+            date=procedure_bill.bill_date,
+            items=items,
+            subtotal=float(procedure_bill.subtotal),
+            discount_percent=float(procedure_bill.discount_percent),
+            total=float(procedure_bill.total_amount)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting procedure print: {str(e)}")
