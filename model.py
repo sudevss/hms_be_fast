@@ -12,6 +12,8 @@ class Facility(Base):
     FacilityAddress = Column(String(500))
     ABDM_NHFR_ID = Column(String(100))
     TaxNumber = Column(String(50))
+    phone_number = Column(String(20))
+    email = Column(String(255))
     # Logo fields
     logo_filename = Column(String(255))
     logo_blob = Column(LargeBinary)
@@ -699,6 +701,7 @@ class HMSParams(Base):
     )
 # ==================== BILLING TABLES ====================
 # Add these classes to model.py before the last line
+# ==================== BILLING TABLES ====================
 
 class LabBill(Base):
     """Lab test bills"""
@@ -706,7 +709,8 @@ class LabBill(Base):
     
     lab_bill_id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
-    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"), nullable=False)
+    token_number = Column(String(20), nullable=False)
+    token_date = Column(Date, nullable=False)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     bill_date = Column(Date, nullable=False, default=func.current_date())
     subtotal = Column(Numeric(10, 2), nullable=False)
@@ -725,12 +729,11 @@ class LabBill(Base):
     
     # Relationships
     facility = relationship("Facility")
-    diagnosis = relationship("PatientDiagnosis")
     patient = relationship("Patients")
     items = relationship("LabBillItem", back_populates="lab_bill", cascade="all, delete-orphan")
     
     __table_args__ = (
-        Index("idx_lab_bill_diagnosis", "diagnosis_id"),
+        Index("idx_lab_bill_token", "facility_id", "token_number", "token_date"),
         Index("idx_lab_bill_patient", "patient_id"),
         Index("idx_lab_bill_date", "bill_date"),
         Index("idx_lab_bill_status", "payment_status"),
@@ -773,7 +776,8 @@ class PharmacyBill(Base):
     
     pharmacy_bill_id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
-    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"), nullable=False)
+    token_number = Column(String(20), nullable=False)
+    token_date = Column(Date, nullable=False)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     bill_date = Column(Date, nullable=False, default=func.current_date())
     subtotal = Column(Numeric(10, 2), nullable=False)
@@ -792,12 +796,11 @@ class PharmacyBill(Base):
     
     # Relationships
     facility = relationship("Facility")
-    diagnosis = relationship("PatientDiagnosis")
     patient = relationship("Patients")
     items = relationship("PharmacyBillItem", back_populates="pharmacy_bill", cascade="all, delete-orphan")
     
     __table_args__ = (
-        Index("idx_pharmacy_bill_diagnosis", "diagnosis_id"),
+        Index("idx_pharmacy_bill_token", "facility_id", "token_number", "token_date"),
         Index("idx_pharmacy_bill_patient", "patient_id"),
         Index("idx_pharmacy_bill_date", "bill_date"),
         Index("idx_pharmacy_bill_status", "payment_status"),
@@ -851,7 +854,8 @@ class ProcedureBill(Base):
     
     procedure_bill_id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
-    diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id"), nullable=False)
+    token_number = Column(String(20), nullable=False)
+    token_date = Column(Date, nullable=False)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     bill_date = Column(Date, nullable=False, default=func.current_date())
     subtotal = Column(Numeric(10, 2), nullable=False)
@@ -870,12 +874,11 @@ class ProcedureBill(Base):
     
     # Relationships
     facility = relationship("Facility")
-    diagnosis = relationship("PatientDiagnosis")
     patient = relationship("Patients")
     items = relationship("ProcedureBillItem", back_populates="procedure_bill", cascade="all, delete-orphan")
     
     __table_args__ = (
-        Index("idx_procedure_bill_diagnosis", "diagnosis_id"),
+        Index("idx_procedure_bill_token", "facility_id", "token_number", "token_date"),
         Index("idx_procedure_bill_patient", "patient_id"),
         Index("idx_procedure_bill_date", "bill_date"),
         Index("idx_procedure_bill_status", "payment_status"),
@@ -907,4 +910,4 @@ class ProcedureBillItem(Base):
         CheckConstraint("final_price >= 0", name="chk_procedure_item_final_positive"),
         CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_procedure_item_discount_range"),
         CheckConstraint("LENGTH(procedure_text) >= 5", name="chk_procedure_item_text_length"),
-    )    
+    )

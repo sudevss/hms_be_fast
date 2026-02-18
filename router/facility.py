@@ -17,11 +17,16 @@ class FacilityBase(BaseModel):
     FacilityName: str
     FacilityAddress: str
     TaxNumber: str
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
+
 
 class FacilityUpdateSchema(BaseModel):
     FacilityName: Optional[str] = None
     FacilityAddress: Optional[str] = None
     TaxNumber: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
 
 class FacilityResponse(FacilityBase):
     facility_id: int

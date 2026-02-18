@@ -98,13 +98,15 @@ class ProcedureBillItem(BaseModel):
         }
 
 class PaymentSummaryRequest(BaseModel):
-    """Request to get payment summary for a diagnosis"""
-    diagnosis_id: int
+    """Request to get payment summary"""
+    token_number: str
+    token_date: date
     facility_id: Optional[int] = None
 
 class CreateBillRequest(BaseModel):
     """Request to create bills for lab/pharmacy/procedures"""
-    diagnosis_id: int
+    token_number: str
+    token_date: date
     facility_id: Optional[int] = None
     appointment_id: Optional[int] = Field(None, description="Associated appointment ID")
     
@@ -123,7 +125,8 @@ class CreateBillRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "diagnosis_id": 123,
+                "token_number": "T001",
+                "token_date": "2024-01-15",
                 "facility_id": 1,
                 "appointment_id": None,
                 "lab_items": [
@@ -171,7 +174,8 @@ class CreateBillRequest(BaseModel):
 
 class PaymentRequest(BaseModel):
     """Request to record a payment"""
-    diagnosis_id: int
+    token_number: str
+    token_date: date
     facility_id: Optional[int] = None
     payment_type: str = Field(..., description="consultation|procedure|lab|pharmacy")
     amount_paid: float = Field(..., gt=0)
@@ -180,7 +184,8 @@ class PaymentRequest(BaseModel):
 
 class PaymentSummaryResponse(BaseModel):
     """Complete payment summary response"""
-    diagnosis_id: int
+    token_number: str
+    token_date: date
     patient_id: int
     patient_name: str
     appointment_id: Optional[int]
@@ -215,7 +220,8 @@ class PaymentSummaryResponse(BaseModel):
 
 class LabPrintResponse(BaseModel):
     """Lab bill print response"""
-    diagnosis_id: int
+    token_number: str
+    token_date: date
     patient_name: str
     date: date
     items: List[LabBillItem]
@@ -225,7 +231,8 @@ class LabPrintResponse(BaseModel):
     
 class PharmacyPrintResponse(BaseModel):
     """Pharmacy bill print response"""
-    diagnosis_id: int
+    token_number: str
+    token_date: date
     patient_name: str
     date: date
     items: List[PharmacyBillItem]
@@ -235,7 +242,8 @@ class PharmacyPrintResponse(BaseModel):
 
 class ProcedurePrintResponse(BaseModel):
     """Procedure bill print response"""
-    diagnosis_id: int
+    token_number: str
+    token_date: date
     patient_name: str
     date: date
     items: List[ProcedureBillItem]
@@ -250,18 +258,25 @@ def calculate_final_price(price: float, discount_percent: float) -> float:
     discount_amount = (price * discount_percent) / 100
     return round(price - discount_amount, 2)
 
-def get_consultation_fee(db: Session, diagnosis_id: int) -> tuple[float, float]:
-    """Get consultation fee and paid amount"""
-    diagnosis = db.query(model.PatientDiagnosis).filter(
-        model.PatientDiagnosis.diagnosis_id == diagnosis_id
+def get_appointment_by_token(db: Session, facility_id: int, token_number: str, token_date: date):
+    """Get appointment by token number and date"""
+    appointment = db.query(model.Appointment).filter(
+        model.Appointment.facility_id == facility_id,
+        model.Appointment.TokenID == token_number,
+        model.Appointment.AppointmentDate == token_date
     ).first()
+    return appointment
+
+def get_consultation_fee(db: Session, facility_id: int, token_number: str, token_date: date) -> tuple[float, float]:
+    """Get consultation fee and paid amount"""
+    appointment = get_appointment_by_token(db, facility_id, token_number, token_date)
     
-    if not diagnosis or not diagnosis.doctor_id:
+    if not appointment or not appointment.doctor_id:
         return 0.0, 0.0
     
     # Get doctor's consultation fee
     doctor = db.query(model.Doctors).filter(
-        model.Doctors.id == diagnosis.doctor_id
+        model.Doctors.id == appointment.doctor_id
     ).first()
     
     if not doctor or not doctor.consultation_fee:
@@ -269,15 +284,10 @@ def get_consultation_fee(db: Session, diagnosis_id: int) -> tuple[float, float]:
     
     consultation_fee = float(doctor.consultation_fee)
     
-    # Check if paid via appointment
+    # Check if paid
     consultation_paid = 0.0
-    if diagnosis.appointment_id:
-        appointment = db.query(model.Appointment).filter(
-            model.Appointment.appointment_id == diagnosis.appointment_id
-        ).first()
-        
-        if appointment and appointment.payment_status == 1:
-            consultation_paid = consultation_fee
+    if appointment.payment_status == 1:
+        consultation_paid = consultation_fee
     
     return consultation_fee, consultation_paid
 
@@ -297,35 +307,32 @@ async def create_bills(
     try:
         effective_facility_id = get_effective_facility_id(current_user, request.facility_id)
         
-        # Validate diagnosis exists
-        diagnosis = db.query(model.PatientDiagnosis).filter(
-            model.PatientDiagnosis.diagnosis_id == request.diagnosis_id,
-            model.PatientDiagnosis.facility_id == effective_facility_id,
-            model.PatientDiagnosis.is_deleted == False
-        ).first()
+        # Get appointment by token
+        appointment = get_appointment_by_token(db, effective_facility_id, request.token_number, request.token_date)
         
-        if not diagnosis:
-            raise HTTPException(status_code=404, detail="Diagnosis not found")
+        if not appointment:
+            raise HTTPException(status_code=404, detail=f"Appointment not found for token {request.token_number} on {request.token_date}")
         
-        # Validate appointment if provided
-        if request.appointment_id:
-            appointment = db.query(model.Appointment).filter(
-                model.Appointment.appointment_id == request.appointment_id
-            ).first()
-            if not appointment:
-                raise HTTPException(status_code=400, detail="Appointment not found")
+        patient_id = appointment.patient_id
         
-       # Delete existing bills for this diagnosis (if recreating)
+        # Validate appointment if provided in request
+        if request.appointment_id and request.appointment_id != appointment.appointment_id:
+            raise HTTPException(status_code=400, detail="Appointment ID mismatch with token")
+        
+       # Delete existing bills for this token (if recreating)
         db.query(model.LabBill).filter(
-            model.LabBill.diagnosis_id == request.diagnosis_id,
+            model.LabBill.token_number == request.token_number,
+            model.LabBill.token_date == request.token_date,
             model.LabBill.facility_id == effective_facility_id
         ).delete()
         db.query(model.PharmacyBill).filter(
-            model.PharmacyBill.diagnosis_id == request.diagnosis_id,
+            model.PharmacyBill.token_number == request.token_number,
+            model.PharmacyBill.token_date == request.token_date,
             model.PharmacyBill.facility_id == effective_facility_id
         ).delete()
         db.query(model.ProcedureBill).filter(
-            model.ProcedureBill.diagnosis_id == request.diagnosis_id,
+            model.ProcedureBill.token_number == request.token_number,
+            model.ProcedureBill.token_date == request.token_date,
             model.ProcedureBill.facility_id == effective_facility_id
         ).delete()
         
@@ -386,8 +393,9 @@ async def create_bills(
             
             lab_bill = model.LabBill(
                 facility_id=effective_facility_id,
-                diagnosis_id=request.diagnosis_id,
-                patient_id=diagnosis.patient_id,
+                token_number=request.token_number,
+                token_date=request.token_date,
+                patient_id=patient_id,
                 bill_date=date.today(),
                 subtotal=lab_subtotal,
                 discount_percent=request.lab_discount_percent,
@@ -478,8 +486,9 @@ async def create_bills(
             
             pharmacy_bill = model.PharmacyBill(
                 facility_id=effective_facility_id,
-                diagnosis_id=request.diagnosis_id,
-                patient_id=diagnosis.patient_id,
+                token_number=request.token_number,
+                token_date=request.token_date,
+                patient_id=patient_id,
                 bill_date=date.today(),
                 subtotal=pharmacy_subtotal,
                 discount_percent=request.pharmacy_discount_percent,
@@ -543,8 +552,9 @@ async def create_bills(
             
             procedure_bill = model.ProcedureBill(
                 facility_id=effective_facility_id,
-                diagnosis_id=request.diagnosis_id,
-                patient_id=diagnosis.patient_id,
+                token_number=request.token_number,
+                token_date=request.token_date,
+                patient_id=patient_id,
                 bill_date=date.today(),
                 subtotal=procedure_subtotal,
                 discount_percent=request.procedure_discount_percent,
@@ -573,7 +583,8 @@ async def create_bills(
             "status_code": 201,
             "message": "Bills created successfully",
             "data": {
-                "diagnosis_id": request.diagnosis_id,
+                "token_number": request.token_number,
+                "token_date": str(request.token_date),
                 "lab_items_count": len(request.lab_items),
                 "pharmacy_items_count": len(request.pharmacy_items),
                 "procedure_items_count": len(request.procedure_items)
@@ -587,15 +598,16 @@ async def create_bills(
         raise HTTPException(status_code=500, detail=f"Error creating bills: {str(e)}")
 
 
-@router.get("/payment-summary/{diagnosis_id}", response_model=PaymentSummaryResponse)
+@router.get("/payment-summary", response_model=PaymentSummaryResponse)
 async def get_payment_summary(
-    diagnosis_id: int,
+    token_number: str = Query(...),
+    token_date: date = Query(...),
     facility_id: Optional[int] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Get complete payment summary for a diagnosis including:
+    Get complete payment summary for a token including:
     - Consultation fee
     - Procedure fees
     - Lab fees
@@ -604,31 +616,27 @@ async def get_payment_summary(
     try:
         effective_facility_id = get_effective_facility_id(current_user, facility_id)
         
-        # Get diagnosis with patient info
-        diagnosis = db.query(model.PatientDiagnosis).join(
-            model.Patients, model.PatientDiagnosis.patient_id == model.Patients.id
-        ).filter(
-            model.PatientDiagnosis.diagnosis_id == diagnosis_id,
-            model.PatientDiagnosis.facility_id == effective_facility_id,
-            model.PatientDiagnosis.is_deleted == False
-        ).first()
+        # Get appointment by token
+        appointment = get_appointment_by_token(db, effective_facility_id, token_number, token_date)
         
-        if not diagnosis:
-            raise HTTPException(status_code=404, detail="Diagnosis not found")
+        if not appointment:
+            raise HTTPException(status_code=404, detail=f"Appointment not found for token {token_number} on {token_date}")
         
         patient = db.query(model.Patients).filter(
-            model.Patients.id == diagnosis.patient_id
+            model.Patients.id == appointment.patient_id
         ).first()
         
         patient_name = f"{patient.firstname} {patient.lastname}".strip() if patient else "Unknown"
         
         # Get consultation fee
-        consultation_fee, consultation_paid = get_consultation_fee(db, diagnosis_id)
+        consultation_fee, consultation_paid = get_consultation_fee(db, effective_facility_id, token_number, token_date)
         consultation_pending = consultation_fee - consultation_paid
         
         # Get procedure bill
         procedure_bill = db.query(model.ProcedureBill).filter(
-            model.ProcedureBill.diagnosis_id == diagnosis_id
+            model.ProcedureBill.token_number == token_number,
+            model.ProcedureBill.token_date == token_date,
+            model.ProcedureBill.facility_id == effective_facility_id
         ).first()
         procedure_total = float(procedure_bill.total_amount) if procedure_bill else 0.0
         procedure_paid = float(procedure_bill.paid_amount) if procedure_bill else 0.0
@@ -636,7 +644,9 @@ async def get_payment_summary(
         
         # Get lab bill
         lab_bill = db.query(model.LabBill).filter(
-            model.LabBill.diagnosis_id == diagnosis_id
+            model.LabBill.token_number == token_number,
+            model.LabBill.token_date == token_date,
+            model.LabBill.facility_id == effective_facility_id
         ).first()
         lab_total = float(lab_bill.total_amount) if lab_bill else 0.0
         lab_paid = float(lab_bill.paid_amount) if lab_bill else 0.0
@@ -644,7 +654,9 @@ async def get_payment_summary(
         
         # Get pharmacy bill
         pharmacy_bill = db.query(model.PharmacyBill).filter(
-            model.PharmacyBill.diagnosis_id == diagnosis_id
+            model.PharmacyBill.token_number == token_number,
+            model.PharmacyBill.token_date == token_date,
+            model.PharmacyBill.facility_id == effective_facility_id
         ).first()
         pharmacy_total = float(pharmacy_bill.total_amount) if pharmacy_bill else 0.0
         pharmacy_paid = float(pharmacy_bill.paid_amount) if pharmacy_bill else 0.0
@@ -656,10 +668,11 @@ async def get_payment_summary(
         total_pending = total_amount - total_paid
         
         return PaymentSummaryResponse(
-            diagnosis_id=diagnosis_id,
-            patient_id=diagnosis.patient_id,
+            token_number=token_number,
+            token_date=token_date,
+            patient_id=appointment.patient_id,
             patient_name=patient_name,
-            appointment_id=diagnosis.appointment_id,
+            appointment_id=appointment.appointment_id,
             consultation_fee=consultation_fee,
             consultation_paid=consultation_paid,
             consultation_pending=consultation_pending,
@@ -696,29 +709,18 @@ async def record_payment(
     try:
         effective_facility_id = get_effective_facility_id(current_user, payment.facility_id)
         
-        # Validate diagnosis
-        diagnosis = db.query(model.PatientDiagnosis).filter(
-            model.PatientDiagnosis.diagnosis_id == payment.diagnosis_id,
-            model.PatientDiagnosis.facility_id == effective_facility_id,
-            model.PatientDiagnosis.is_deleted == False
-        ).first()
+        # Get appointment by token
+        appointment = get_appointment_by_token(db, effective_facility_id, payment.token_number, payment.token_date)
         
-        if not diagnosis:
-            raise HTTPException(status_code=404, detail="Diagnosis not found")
+        if not appointment:
+            raise HTTPException(status_code=404, detail=f"Appointment not found for token {payment.token_number} on {payment.token_date}")
         
         payment_type_lower = payment.payment_type.lower()
         
         # Handle consultation payment
         if payment_type_lower == "consultation":
-            if not diagnosis.appointment_id:
-                raise HTTPException(status_code=400, detail="No appointment associated with this diagnosis")
-            
-            appointment = db.query(model.Appointment).filter(
-                model.Appointment.appointment_id == diagnosis.appointment_id
-            ).first()
-            
-            if not appointment:
-                raise HTTPException(status_code=404, detail="Appointment not found")
+            if not appointment.appointment_id:
+                raise HTTPException(status_code=400, detail="No appointment associated with this token")
             
             appointment.payment_status = True
             appointment.payment_method = payment.payment_method
@@ -726,7 +728,7 @@ async def record_payment(
             
             # Update patient payment status
             patient = db.query(model.Patients).filter(
-                model.Patients.id == diagnosis.patient_id
+                model.Patients.id == appointment.patient_id
             ).first()
             if patient:
                 patient.is_paid = True
@@ -734,7 +736,9 @@ async def record_payment(
         # Handle procedure payment
         elif payment_type_lower == "procedure":
             procedure_bill = db.query(model.ProcedureBill).filter(
-                model.ProcedureBill.diagnosis_id == payment.diagnosis_id
+                model.ProcedureBill.token_number == payment.token_number,
+                model.ProcedureBill.token_date == payment.token_date,
+                model.ProcedureBill.facility_id == effective_facility_id
             ).first()
             
             if not procedure_bill:
@@ -753,7 +757,9 @@ async def record_payment(
         # Handle lab payment
         elif payment_type_lower == "lab":
             lab_bill = db.query(model.LabBill).filter(
-                model.LabBill.diagnosis_id == payment.diagnosis_id
+                model.LabBill.token_number == payment.token_number,
+                model.LabBill.token_date == payment.token_date,
+                model.LabBill.facility_id == effective_facility_id
             ).first()
             
             if not lab_bill:
@@ -772,7 +778,9 @@ async def record_payment(
         # Handle pharmacy payment
         elif payment_type_lower == "pharmacy":
             pharmacy_bill = db.query(model.PharmacyBill).filter(
-                model.PharmacyBill.diagnosis_id == payment.diagnosis_id
+                model.PharmacyBill.token_number == payment.token_number,
+                model.PharmacyBill.token_date == payment.token_date,
+                model.PharmacyBill.facility_id == effective_facility_id
             ).first()
             
             if not pharmacy_bill:
@@ -797,7 +805,8 @@ async def record_payment(
             "status_code": 200,
             "message": f"Payment recorded successfully for {payment.payment_type}",
             "data": {
-                "diagnosis_id": payment.diagnosis_id,
+                "token_number": payment.token_number,
+                "token_date": str(payment.token_date),
                 "payment_type": payment.payment_type,
                 "amount_paid": payment.amount_paid,
                 "payment_method": payment.payment_method
@@ -811,9 +820,10 @@ async def record_payment(
         raise HTTPException(status_code=500, detail=f"Error recording payment: {str(e)}")
 
 
-@router.get("/lab-print/{diagnosis_id}", response_model=LabPrintResponse)
+@router.get("/lab-print", response_model=LabPrintResponse)
 async def get_lab_print(
-    diagnosis_id: int,
+    token_number: str = Query(...),
+    token_date: date = Query(...),
     facility_id: Optional[int] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -826,7 +836,8 @@ async def get_lab_print(
         lab_bill = db.query(model.LabBill).options(
             joinedload(model.LabBill.items)
         ).filter(
-            model.LabBill.diagnosis_id == diagnosis_id,
+            model.LabBill.token_number == token_number,
+            model.LabBill.token_date == token_date,
             model.LabBill.facility_id == effective_facility_id
         ).first()
         
@@ -834,14 +845,8 @@ async def get_lab_print(
             raise HTTPException(status_code=404, detail="Lab bill not found")
         
         # Get patient info
-        diagnosis = db.query(model.PatientDiagnosis).join(
-            model.Patients, model.PatientDiagnosis.patient_id == model.Patients.id
-        ).filter(
-            model.PatientDiagnosis.diagnosis_id == diagnosis_id
-        ).first()
-        
         patient = db.query(model.Patients).filter(
-            model.Patients.id == diagnosis.patient_id
+            model.Patients.id == lab_bill.patient_id
         ).first()
         
         patient_name = f"{patient.firstname} {patient.lastname}".strip() if patient else "Unknown"
@@ -859,7 +864,8 @@ async def get_lab_print(
         ]
         
         return LabPrintResponse(
-            diagnosis_id=diagnosis_id,
+            token_number=token_number,
+            token_date=token_date,
             patient_name=patient_name,
             date=lab_bill.bill_date,
             items=items,
@@ -874,9 +880,10 @@ async def get_lab_print(
         raise HTTPException(status_code=500, detail=f"Error getting lab print: {str(e)}")
 
 
-@router.get("/pharmacy-print/{diagnosis_id}", response_model=PharmacyPrintResponse)
+@router.get("/pharmacy-print", response_model=PharmacyPrintResponse)
 async def get_pharmacy_print(
-    diagnosis_id: int,
+    token_number: str = Query(...),
+    token_date: date = Query(...),
     facility_id: Optional[int] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -889,7 +896,8 @@ async def get_pharmacy_print(
         pharmacy_bill = db.query(model.PharmacyBill).options(
             joinedload(model.PharmacyBill.items)
         ).filter(
-            model.PharmacyBill.diagnosis_id == diagnosis_id,
+            model.PharmacyBill.token_number == token_number,
+            model.PharmacyBill.token_date == token_date,
             model.PharmacyBill.facility_id == effective_facility_id
         ).first()
         
@@ -897,14 +905,8 @@ async def get_pharmacy_print(
             raise HTTPException(status_code=404, detail="Pharmacy bill not found")
         
         # Get patient info
-        diagnosis = db.query(model.PatientDiagnosis).join(
-            model.Patients, model.PatientDiagnosis.patient_id == model.Patients.id
-        ).filter(
-            model.PatientDiagnosis.diagnosis_id == diagnosis_id
-        ).first()
-        
         patient = db.query(model.Patients).filter(
-            model.Patients.id == diagnosis.patient_id
+            model.Patients.id == pharmacy_bill.patient_id
         ).first()
         
         patient_name = f"{patient.firstname} {patient.lastname}".strip() if patient else "Unknown"
@@ -928,7 +930,8 @@ async def get_pharmacy_print(
         ]
         
         return PharmacyPrintResponse(
-            diagnosis_id=diagnosis_id,
+            token_number=token_number,
+            token_date=token_date,
             patient_name=patient_name,
             date=pharmacy_bill.bill_date,
             items=items,
@@ -943,9 +946,10 @@ async def get_pharmacy_print(
         raise HTTPException(status_code=500, detail=f"Error getting pharmacy print: {str(e)}")
 
 
-@router.get("/procedure-print/{diagnosis_id}", response_model=ProcedurePrintResponse)
+@router.get("/procedure-print", response_model=ProcedurePrintResponse)
 async def get_procedure_print(
-    diagnosis_id: int,
+    token_number: str = Query(...),
+    token_date: date = Query(...),
     facility_id: Optional[int] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -958,7 +962,8 @@ async def get_procedure_print(
         procedure_bill = db.query(model.ProcedureBill).options(
             joinedload(model.ProcedureBill.items)
         ).filter(
-            model.ProcedureBill.diagnosis_id == diagnosis_id,
+            model.ProcedureBill.token_number == token_number,
+            model.ProcedureBill.token_date == token_date,
             model.ProcedureBill.facility_id == effective_facility_id
         ).first()
         
@@ -966,14 +971,8 @@ async def get_procedure_print(
             raise HTTPException(status_code=404, detail="Procedure bill not found")
         
         # Get patient info
-        diagnosis = db.query(model.PatientDiagnosis).join(
-            model.Patients, model.PatientDiagnosis.patient_id == model.Patients.id
-        ).filter(
-            model.PatientDiagnosis.diagnosis_id == diagnosis_id
-        ).first()
-        
         patient = db.query(model.Patients).filter(
-            model.Patients.id == diagnosis.patient_id
+            model.Patients.id == procedure_bill.patient_id
         ).first()
         
         patient_name = f"{patient.firstname} {patient.lastname}".strip() if patient else "Unknown"
@@ -989,7 +988,8 @@ async def get_procedure_print(
         ]
         
         return ProcedurePrintResponse(
-            diagnosis_id=diagnosis_id,
+            token_number=token_number,
+            token_date=token_date,
             patient_name=patient_name,
             date=procedure_bill.bill_date,
             items=items,
