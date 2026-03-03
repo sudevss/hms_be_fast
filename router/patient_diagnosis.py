@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator,model_validator
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, APIRouter, Depends, Query
 from sqlalchemy import and_, desc
@@ -38,9 +38,23 @@ def get_effective_facility_id(current_user: CurrentUser, requested_facility_id: 
 # ==================== PYDANTIC MODELS ====================
 
 class DiagnosisSymptomItem(BaseModel):
-    symptom_id: int
+    symptom_id: Optional[int] = None          # ← now optional
+    free_text_symptom: Optional[str] = Field(None, max_length=255)  # ← new
     duration_days: Optional[int] = Field(None, gt=0)
     remarks: Optional[str] = None
+
+    @field_validator('symptom_id', 'duration_days')
+    @classmethod
+    def convert_zero_to_none(cls, v):
+        if v == 0:
+            return None
+        return v
+
+    @model_validator(mode='after')
+    def validate_symptom_source(self):
+        if not self.symptom_id and not self.free_text_symptom:
+            raise ValueError("Either symptom_id or free_text_symptom must be provided")
+        return self
 
 class DiagnosisPrescriptionItem(BaseModel):
     medicine_id: int
@@ -118,8 +132,18 @@ class PatientDiagnosisCreate(BaseModel):
                 "template_id": 0,
                 "followup_date": "2025-12-06",
                 "symptoms": [
-                    {"symptom_id": 0, "duration_days": 0, "remarks": "High fever"},
-                    {"symptom_id": 0, "duration_days": 0, "remarks": "Body ache"}
+                    {
+                    "symptom_id": 1,
+                    "free_text_symptom": None,
+                    "duration_days": 3,
+                    "remarks": "High fever"
+                },
+                {
+                    "symptom_id": None,
+                    "free_text_symptom": "Burning sensation in chest",
+                    "duration_days": 2,
+                    "remarks": "Started yesterday"
+                }
                 ],
                 "prescriptions": [
                     {
@@ -172,6 +196,7 @@ def diagnosis_to_dict(diagnosis, include_details: bool = True) -> Dict[str, Any]
             "patient_symptom_id": s.patient_symptom_id,
             "symptom_id": s.symptom_id,
             "symptom_name": s.symptom.symptom_name if s.symptom else None,
+            "free_text_symptom": s.free_text_symptom,  # ← new
             "duration_days": s.duration_days,
             "remarks": s.remarks
         } for s in diagnosis.symptoms]
@@ -427,6 +452,7 @@ async def create_or_update_patient_diagnosis(
                 facility_id=effective_facility_id,
                 diagnosis_id=diagnosis_id,
                 symptom_id=symptom_item.symptom_id,
+                free_text_symptom=symptom_item.free_text_symptom,
                 duration_days=symptom_item.duration_days,
                 remarks=symptom_item.remarks,
                 created_by=current_user.user_id

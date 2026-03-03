@@ -485,7 +485,8 @@ class DiagnosisSymptoms(Base):
     patient_symptom_id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
     diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
-    symptom_id = Column(Integer, ForeignKey("symptom_master.symptom_id"), nullable=False)
+    symptom_id = Column(Integer, ForeignKey("symptom_master.symptom_id"), nullable=True)
+    free_text_symptom = Column(String(255), nullable=True)  # ← new field
     duration_days = Column(Integer)
     remarks = Column(Text)
     
@@ -504,6 +505,10 @@ class DiagnosisSymptoms(Base):
         Index("idx_diagnosis_symptom", "diagnosis_id", "symptom_id"),
         Index("idx_diagnosis_symptom_facility", "facility_id"),
         CheckConstraint("duration_days IS NULL OR duration_days > 0", name="chk_diagnosis_symptom_duration_positive"),
+        CheckConstraint(
+            "symptom_id IS NOT NULL OR free_text_symptom IS NOT NULL",
+            name="chk_symptom_id_or_free_text"  # ← ensures at least one is provided
+        ),
     )
 
 
