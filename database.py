@@ -4,7 +4,7 @@ from sqlalchemy.pool import NullPool   # useful for Vercel/serverless
 
 # Database connection URL
 DATABASE_URL = (
-     "mysql+pymysql://hmsmaster:6wdEF&&57^Vh9^fJ8p"
+     "mysql+pymysql://hmsmaster:3jB%2567Cy9w%26Egh%247%247"
     "@public-primary-mysql-inbangalore-189741-1661911.db.onutho.com:3306/defaultdb?charset=utf8mb4"
 )
 
@@ -44,6 +44,7 @@ def get_db():
     finally:
 
         db.close()
+
 
 
 
