@@ -121,8 +121,7 @@ def authenticate_user(db: Session, user_id: str, password: str):
     return user, facility
 
 # API Endpoints
-@router.post("/login", response_model=LoginResponse)
-def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+def _perform_login(login_data: LoginRequest, db: Session) -> LoginResponse:
     """
     HMS Login endpoint - Returns JWT token and user/facility details
     This token can be used for all protected endpoints
@@ -183,6 +182,16 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         ),
         message=welcome_message
     )
+
+
+@router.post("", response_model=LoginResponse)
+def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+    return _perform_login(login_data, db)
+
+
+@router.post("/login", response_model=LoginResponse, include_in_schema=False)
+def login_legacy_alias(login_data: LoginRequest, db: Session = Depends(get_db)):
+    return _perform_login(login_data, db)
 
 @router.get("/me")
 def get_current_user_info(
