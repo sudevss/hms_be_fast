@@ -4,9 +4,8 @@ from sqlalchemy.pool import NullPool   # useful for Vercel/serverless
 
 # Database connection URL
 DATABASE_URL = (
-    "mysql+pymysql://inthms_wintrunkin:"
-    "c3ed27d75cc0342a1f17afe5d402ee4884c33b85"
-    "@4p6ioe.h.filess.io:61002/inthms_wintrunkin?charset=utf8mb4"
+     "mysql+pymysql://hmsmaster:3jB%67Cy9w&Egh$Y7$"
+    "@public-primary-mysql-inbangalore-189741-1661911.db.onutho.com:3306/defaultdb?charset=utf8mb4"
 )
 
 # ---- Option A: Safe small pool (good if running on a server/VM) ----
@@ -43,4 +42,5 @@ def get_db():
     try:
         yield db
     finally:
+
         db.close()
