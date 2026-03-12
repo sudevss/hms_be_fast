@@ -274,6 +274,41 @@ class LabMasterUpdate(BaseModel):
                 "is_active": True
             }
         }
+class ProcedureMasterCreate(BaseModel):
+    facility_id: int
+    procedure_name: str = Field(..., min_length=2, max_length=255)
+    description: Optional[str] = None
+    prerequisite_text: Optional[str] = None
+    price: Optional[float] = Field(None, ge=0)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "facility_id": 1,
+                "procedure_name": "Blood Pressure Monitoring",
+                "description": "Measurement of systolic and diastolic pressure",
+                "prerequisite_text": "Patient should be rested for 5 minutes",
+                "price": 100.00
+            }
+        }
+
+class ProcedureMasterUpdate(BaseModel):
+    procedure_name: Optional[str] = Field(None, min_length=2, max_length=255)
+    description: Optional[str] = None
+    prerequisite_text: Optional[str] = None
+    price: Optional[float] = Field(None, ge=0)
+    is_active: Optional[bool] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "procedure_name": "Blood Pressure Monitoring (Digital)",
+                "description": "Digital measurement of systolic and diastolic pressure",
+                "prerequisite_text": "Patient should be rested for 5 minutes",
+                "price": 120.00,
+                "is_active": True
+            }
+        }
 
 # ==================== MASTER DATA ENDPOINTS ====================
 
@@ -833,6 +868,189 @@ async def update_lab_test(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error updating lab test: {str(e)}")
+
+@router.post("/procedure-master", tags=["Master Data"])
+async def create_procedure(
+    procedure: ProcedureMasterCreate,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new procedure in master data"""
+    try:
+        effective_facility_id = get_effective_facility_id(current_user, procedure.facility_id)
+        
+        if procedure.facility_id != effective_facility_id:
+            raise HTTPException(status_code=403, detail="You can only create data for your facility")
+        
+        existing = db.query(model.ProcedureMaster).filter(
+            model.ProcedureMaster.procedure_name == procedure.procedure_name,
+            model.ProcedureMaster.facility_id == procedure.facility_id,
+            model.ProcedureMaster.is_deleted == False
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Procedure already exists in your facility")
+        
+        new_procedure = model.ProcedureMaster(
+            **procedure.dict(),
+            created_by=current_user.user_id
+        )
+        db.add(new_procedure)
+        db.commit()
+        db.refresh(new_procedure)
+        
+        return {
+            "status_code": 201,
+            "message": "Procedure created successfully",
+            "data": {
+                "procedure_id": new_procedure.procedure_id,
+                "facility_id": new_procedure.facility_id,
+                "procedure_name": new_procedure.procedure_name
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating procedure: {str(e)}")
+
+
+@router.get("/procedure-master", tags=["Master Data"])
+async def get_procedures(
+    search: Optional[str] = Query(None, description="Search by procedure name"),
+    is_active: bool = Query(True),
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get list of procedures"""
+    try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        query = db.query(model.ProcedureMaster).filter(
+            model.ProcedureMaster.facility_id == effective_facility_id,
+            model.ProcedureMaster.is_active == is_active,
+            model.ProcedureMaster.is_deleted == False
+        )
+        
+        if search:
+            query = query.filter(model.ProcedureMaster.procedure_name.ilike(f"%{search}%"))
+        
+        procedures = query.order_by(model.ProcedureMaster.procedure_name).all()
+        
+        return [{
+            "procedure_id": p.procedure_id,
+            "facility_id": p.facility_id,
+            "procedure_name": p.procedure_name,
+            "description": p.description,
+            "prerequisite_text": p.prerequisite_text,
+            "price": p.price
+        } for p in procedures]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching procedures: {str(e)}")
+
+
+@router.delete("/procedure-master/{procedure_id}", tags=["Master Data"])
+async def delete_procedure(
+    procedure_id: int,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Soft delete a procedure"""
+    try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        procedure = db.query(model.ProcedureMaster).filter(
+            model.ProcedureMaster.procedure_id == procedure_id,
+            model.ProcedureMaster.facility_id == effective_facility_id,
+            model.ProcedureMaster.is_deleted == False
+        ).first()
+        
+        if not procedure:
+            raise HTTPException(status_code=404, detail="Procedure not found")
+        
+        procedure.is_deleted = True
+        procedure.is_active = False
+        procedure.deleted_by = current_user.user_id
+        procedure.deleted_at = datetime.now()
+        db.commit()
+        
+        return {"status_code": 200, "message": "Procedure deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting procedure: {str(e)}")
+
+
+@router.put("/procedure-master/{procedure_id}", tags=["Master Data"])
+async def update_procedure(
+    procedure_id: int,
+    procedure_update: ProcedureMasterUpdate,
+    facility_id: Optional[int] = Query(None, description="Facility ID (Super Admin only)"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an existing procedure in master data"""
+    try:
+        effective_facility_id = get_effective_facility_id(current_user, facility_id)
+        
+        procedure = db.query(model.ProcedureMaster).filter(
+            model.ProcedureMaster.procedure_id == procedure_id,
+            model.ProcedureMaster.facility_id == effective_facility_id,
+            model.ProcedureMaster.is_deleted == False
+        ).first()
+        
+        if not procedure:
+            raise HTTPException(status_code=404, detail="Procedure not found")
+        
+        # Check if updating name to existing name
+        if procedure_update.procedure_name is not None and procedure_update.procedure_name != procedure.procedure_name:
+            existing = db.query(model.ProcedureMaster).filter(
+                model.ProcedureMaster.procedure_name == procedure_update.procedure_name,
+                model.ProcedureMaster.facility_id == effective_facility_id,
+                model.ProcedureMaster.is_deleted == False,
+                model.ProcedureMaster.procedure_id != procedure_id
+            ).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Procedure with this name already exists")
+        
+        # Update fields
+        if procedure_update.procedure_name is not None:
+            procedure.procedure_name = procedure_update.procedure_name
+        if procedure_update.description is not None:
+            procedure.description = procedure_update.description
+        if procedure_update.prerequisite_text is not None:
+            procedure.prerequisite_text = procedure_update.prerequisite_text
+        if procedure_update.price is not None:
+            procedure.price = procedure_update.price
+        if procedure_update.is_active is not None:
+            procedure.is_active = procedure_update.is_active
+        
+        procedure.updated_by = current_user.user_id
+        procedure.updated_at = datetime.now()
+        
+        db.commit()
+        db.refresh(procedure)
+        
+        return {
+            "status_code": 200,
+            "message": "Procedure updated successfully",
+            "data": {
+                "procedure_id": procedure.procedure_id,
+                "facility_id": procedure.facility_id,
+                "procedure_name": procedure.procedure_name,
+                "description": procedure.description,
+                "prerequisite_text": procedure.prerequisite_text,
+                "price": procedure.price,
+                "is_active": procedure.is_active
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating procedure: {str(e)}")
 
 # ==================== TEMPLATE ENDPOINTS ====================
 

@@ -70,8 +70,22 @@ class DiagnosisLabTestItem(BaseModel):
     prerequisite_text: Optional[str] = None
 
 class DiagnosisProcedureItem(BaseModel):
-    procedure_text: str = Field(..., min_length=5)
-    price: Optional[float] = Field(None, ge=0)
+    procedure_id: Optional[int] = None
+    free_text_procedure: Optional[str] = Field(None, max_length=255)
+    prerequisite_text: Optional[str] = None
+
+    @field_validator('procedure_id')
+    @classmethod
+    def convert_zero_to_none(cls, v):
+        if v == 0:
+            return None
+        return v
+
+    @model_validator(mode='after')
+    def validate_procedure_source(self):
+        if not self.procedure_id and not self.free_text_procedure:
+            raise ValueError("Either procedure_id or free_text_procedure must be provided")
+        return self
 
 class PatientDiagnosisCreate(BaseModel):
     """Request model for creating/updating patient diagnosis"""
@@ -159,8 +173,17 @@ class PatientDiagnosisCreate(BaseModel):
                     {"test_id": 0, "prerequisite_text": "Fasting required"}
                 ],
                 "procedures": [
-                    {"procedure_text": "Blood pressure monitoring", "price": 50.0}
-                ]
+    {
+        "procedure_id": 1,
+        "free_text_procedure": None,
+        "prerequisite_text": "Some prerequisite"
+    },
+    {
+        "procedure_id": None,
+        "free_text_procedure": "Blood pressure monitoring",
+        "prerequisite_text": None
+    }
+]
             }
         }
         
@@ -224,10 +247,13 @@ def diagnosis_to_dict(diagnosis, include_details: bool = True) -> Dict[str, Any]
         } for lt in diagnosis.lab_tests]
         
         result["procedures"] = [{
-            "procedure_id": proc.procedure_id,
-            "procedure_text": proc.procedure_text,
-            "price": proc.price
-        } for proc in diagnosis.procedures]
+    "diagnosis_procedure_id": proc.diagnosis_procedure_id,
+    "procedure_id": proc.procedure_id,
+    "procedure_name": proc.procedure.procedure_name if proc.procedure else None,
+    "free_text_procedure": proc.free_text_procedure,
+    "prerequisite_text": proc.prerequisite_text,
+    "price": proc.procedure.price if proc.procedure else None
+} for proc in diagnosis.procedures]
     
     return result
 
@@ -491,8 +517,9 @@ async def create_or_update_patient_diagnosis(
             diagnosis_procedure = model.DiagnosisProcedures(
                 facility_id=effective_facility_id,
                 diagnosis_id=diagnosis_id,
-                procedure_text=procedure_item.procedure_text,
-                price=procedure_item.price,
+                procedure_id=procedure_item.procedure_id,
+                free_text_procedure=procedure_item.free_text_procedure,
+                prerequisite_text=procedure_item.prerequisite_text,
                 created_by=current_user.user_id
             )
             db.add(diagnosis_procedure)
@@ -547,7 +574,7 @@ async def get_patient_diagnosis(
                 joinedload(model.PatientDiagnosis.symptoms).joinedload(model.DiagnosisSymptoms.symptom),
                 joinedload(model.PatientDiagnosis.prescriptions).joinedload(model.DiagnosisPrescription.medicine),
                 joinedload(model.PatientDiagnosis.lab_tests).joinedload(model.DiagnosisLabTests.test),
-                joinedload(model.PatientDiagnosis.procedures)
+                joinedload(model.PatientDiagnosis.procedures).joinedload(model.DiagnosisProcedures.procedure)
             )
         else:
             query = db.query(model.PatientDiagnosis)
@@ -602,7 +629,7 @@ async def get_diagnosis_by_id(
             joinedload(model.PatientDiagnosis.symptoms).joinedload(model.DiagnosisSymptoms.symptom),
             joinedload(model.PatientDiagnosis.prescriptions).joinedload(model.DiagnosisPrescription.medicine),
             joinedload(model.PatientDiagnosis.lab_tests).joinedload(model.DiagnosisLabTests.test),
-            joinedload(model.PatientDiagnosis.procedures)
+            joinedload(model.PatientDiagnosis.procedures).joinedload(model.DiagnosisProcedures.procedure)
         ).filter(
             model.PatientDiagnosis.diagnosis_id == diagnosis_id,
             model.PatientDiagnosis.is_deleted == False

@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import date, datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator,model_validator
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, APIRouter, Depends, Query
 from sqlalchemy import and_, or_, desc, func
@@ -85,19 +85,25 @@ class PharmacyBillItem(BaseModel):
 
 class ProcedureBillItem(BaseModel):
     """Procedure bill item"""
-    procedure_text: str
-    price: float
+    procedure_id: Optional[int] = None
+    free_text_procedure: Optional[str] = None
+    procedure_text: Optional[str] = None  # resolved name, set internally
+    price: Optional[float] = None
     discount_percent: float = Field(0, ge=0, le=100)
     final_price: Optional[float] = None
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "procedure_text": "Blood pressure monitoring",
-                "price": 500.0,
-                "discount_percent": 0
-            }
-        }
+    @model_validator(mode='after')
+    def validate_procedure_source(self):
+        if not self.procedure_id and not self.free_text_procedure:
+            raise ValueError("Either procedure_id or free_text_procedure must be provided")
+        return self
+
+class ProcedureBillItemPrint(BaseModel):
+    """Procedure bill item for print/response - no validation required"""
+    procedure_text: str
+    price: float
+    discount_percent: float
+    final_price: Optional[float] = None
 
 
 class CreateBillRequest(BaseModel):
@@ -127,8 +133,11 @@ class CreateBillRequest(BaseModel):
                 "lab_discount_percent": 0,
                 "pharmacy_items": [{"medicine_id": 10, "quantity": 6, "discount_percent": 10, "dosage_info": "M-A-N", "food_timing": "After Food", "duration_days": 2}],
                 "pharmacy_discount_percent": 0,
-                "procedure_items": [{"procedure_text": "Blood pressure monitoring", "price": 500.0, "discount_percent": 0}],
-                "procedure_discount_percent": 0
+                "procedure_items": [
+                {"procedure_id": 1, "discount_percent": 0},
+                {"free_text_procedure": "Custom dressing", "price": 200.0, "discount_percent": 0}
+            ],
+            "procedure_discount_percent": 0
             }
         }
 
@@ -219,7 +228,7 @@ class ProcedurePrintResponse(BaseModel):
     token_date: date
     patient_name: str
     date: date
-    items: List[ProcedureBillItem]
+    items: List[ProcedureBillItemPrint]  # ← changed
     subtotal: float
     discount_percent: float
     total: float
@@ -450,7 +459,7 @@ async def load_diagnosis_for_billing(
                 .joinedload(model.DiagnosisPrescription.medicine),
             joinedload(model.PatientDiagnosis.lab_tests)
                 .joinedload(model.DiagnosisLabTests.test),
-            joinedload(model.PatientDiagnosis.procedures),
+            joinedload(model.PatientDiagnosis.procedures).joinedload(model.DiagnosisProcedures.procedure),
         ]
 
         # Stages 1a + 1b — current visit
@@ -540,9 +549,19 @@ async def load_diagnosis_for_billing(
         procedure_items: List[DiagnosisProcedureItem] = []
         if diagnosis:
             for proc in diagnosis.procedures:
+                procedure_text = (
+                    proc.procedure.procedure_name if proc.procedure
+                    else proc.free_text_procedure
+                )
+                price = (
+                    float(proc.procedure.price) if proc.procedure and proc.procedure.price
+                    else 0.0
+                )
+                if not procedure_text:
+                    continue
                 procedure_items.append(DiagnosisProcedureItem(
-                    procedure_text=proc.procedure_text,
-                    price=float(proc.price) if proc.price else 0.0,
+                    procedure_text=procedure_text,
+                    price=price,
                     discount_percent=0.0,
                 ))
 
@@ -791,12 +810,40 @@ async def create_bills(
             pr_item_data = []
 
             for item in request.procedure_items:
-                after_item_disc = calculate_final_price(item.price, item.discount_percent)
-                pr_subtotal += item.price
+                if item.procedure_id:
+                    procedure = db.query(model.ProcedureMaster).filter(
+                        model.ProcedureMaster.procedure_id == item.procedure_id,
+                        model.ProcedureMaster.facility_id == effective_facility_id,
+                        model.ProcedureMaster.is_deleted == False,
+                        model.ProcedureMaster.is_active == True,
+                    ).first()
+                    if not procedure:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Procedure ID {item.procedure_id} not found or inactive",
+                        )
+                    procedure_text = procedure.procedure_name
+                    price = item.price if item.price else (float(procedure.price) if procedure.price else None)
+                    if not price:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"No price set for procedure: {procedure.procedure_name}",
+                        )
+                else:
+                    procedure_text = item.free_text_procedure
+                    price = item.price
+                    if not price:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Price is required for free text procedure: {procedure_text}",
+                        )
+
+                after_item_disc = calculate_final_price(price, item.discount_percent)
+                pr_subtotal += price
                 pr_after_item_discounts += after_item_disc
                 pr_item_data.append({
-                    "procedure_text": item.procedure_text,
-                    "price": item.price,
+                    "procedure_text": procedure_text,
+                    "price": price,
                     "discount_percent": item.discount_percent,
                     "after_item_disc": after_item_disc,
                 })
@@ -1159,7 +1206,7 @@ async def get_procedure_print(
         patient_name = f"{patient.firstname} {patient.lastname}".strip() if patient else "Unknown"
 
         items = [
-            ProcedureBillItem(
+            ProcedureBillItemPrint(
                 procedure_text=i.procedure_text,
                 price=float(i.price),
                 discount_percent=float(i.discount_percent),

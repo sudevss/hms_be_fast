@@ -399,6 +399,37 @@ class LabMaster(Base):
         CheckConstraint("LENGTH(test_name) >= 2", name="chk_test_name_length"),
         CheckConstraint("price IS NULL OR price >= 0", name="chk_lab_price_positive"),
     )
+class ProcedureMaster(Base):
+    """Master table for all procedures"""
+    __tablename__ = "procedure_master"
+    
+    procedure_id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
+    procedure_name = Column(String(255), nullable=False, index=True)
+    description = Column(Text)
+    prerequisite_text = Column(Text)
+    price = Column(Numeric(10, 2))
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    
+    # Audit fields
+    created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_by = Column(Integer, ForeignKey("doctors.id"))
+    updated_at = Column(DateTime, onupdate=func.now())
+    deleted_by = Column(Integer, ForeignKey("doctors.id"))
+    deleted_at = Column(DateTime)
+    
+    # Relationships
+    facility = relationship("Facility")
+    
+    __table_args__ = (
+        Index("idx_procedure_master_facility", "facility_id"),
+        Index("idx_procedure_master_deleted", "is_deleted"),
+        Index("idx_procedure_master_name_facility", "procedure_name", "facility_id", "is_deleted", unique=True),
+        CheckConstraint("LENGTH(procedure_name) >= 2", name="chk_procedure_name_length"),
+        CheckConstraint("price IS NULL OR price >= 0", name="chk_procedure_master_price_positive"),
+    )
 
 
 # ==================== TEMPLATE JUNCTION TABLES ====================
@@ -571,32 +602,34 @@ class DiagnosisLabTests(Base):
         Index("idx_diagnosis_lab_test_facility", "facility_id"),
     )
 
-
 class DiagnosisProcedures(Base):
-    """Procedures recommended/performed for a patient diagnosis"""
     __tablename__ = "diagnosis_procedures"
     
-    procedure_id = Column(Integer, primary_key=True, index=True)
+    diagnosis_procedure_id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("facility.facility_id"), nullable=False)
     diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
-    procedure_text = Column(Text, nullable=False)
-    price = Column(Numeric(10, 2))
-    
+    procedure_id = Column(Integer, ForeignKey("procedure_master.procedure_id"), nullable=True)  # nullable for free text
+    free_text_procedure = Column(String(255), nullable=True)  # ← new
+    prerequisite_text = Column(Text)
+
     # Audit fields
     created_by = Column(Integer, ForeignKey("doctors.id"), nullable=False)
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_by = Column(Integer, ForeignKey("doctors.id"))
     updated_at = Column(DateTime, onupdate=func.now())
-    
+
     # Relationships
     facility = relationship("Facility")
     diagnosis = relationship("PatientDiagnosis", back_populates="procedures")
-    
+    procedure = relationship("ProcedureMaster")
+
     __table_args__ = (
-        Index("idx_diagnosis_procedure", "diagnosis_id"),
+        Index("idx_diagnosis_procedure", "diagnosis_id", "procedure_id"),
         Index("idx_diagnosis_procedure_facility", "facility_id"),
-        CheckConstraint("LENGTH(procedure_text) >= 5", name="chk_procedure_text_length"),
-        CheckConstraint("price IS NULL OR price >= 0", name="chk_procedure_price_positive"),
+        CheckConstraint(
+            "procedure_id IS NOT NULL OR free_text_procedure IS NOT NULL",
+            name="chk_procedure_id_or_free_text"
+        ),
     )
 
 
