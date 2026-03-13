@@ -72,6 +72,7 @@ class DiagnosisLabTestItem(BaseModel):
 class DiagnosisProcedureItem(BaseModel):
     procedure_id: Optional[int] = None
     free_text_procedure: Optional[str] = Field(None, max_length=255)
+    price: Optional[float] = Field(None, ge=0)  # ← add this
     prerequisite_text: Optional[str] = None
 
     @field_validator('procedure_id')
@@ -85,6 +86,8 @@ class DiagnosisProcedureItem(BaseModel):
     def validate_procedure_source(self):
         if not self.procedure_id and not self.free_text_procedure:
             raise ValueError("Either procedure_id or free_text_procedure must be provided")
+        if self.free_text_procedure and not self.price:
+            raise ValueError("Price is required when using free text procedure")
         return self
 
 class PatientDiagnosisCreate(BaseModel):
@@ -176,11 +179,13 @@ class PatientDiagnosisCreate(BaseModel):
     {
         "procedure_id": 1,
         "free_text_procedure": None,
+        "price": None,  # ← optional, overrides master price if provided
         "prerequisite_text": "Some prerequisite"
     },
     {
         "procedure_id": None,
         "free_text_procedure": "Blood pressure monitoring",
+        "price": 150.0,  # ← required for free text
         "prerequisite_text": None
     }
 ]
@@ -252,7 +257,7 @@ def diagnosis_to_dict(diagnosis, include_details: bool = True) -> Dict[str, Any]
     "procedure_name": proc.procedure.procedure_name if proc.procedure else None,
     "free_text_procedure": proc.free_text_procedure,
     "prerequisite_text": proc.prerequisite_text,
-    "price": proc.procedure.price if proc.procedure else None
+    "price": float(proc.price) if proc.price else (float(proc.procedure.price) if proc.procedure and proc.procedure.price else None)  # ← updated
 } for proc in diagnosis.procedures]
     
     return result
@@ -519,6 +524,7 @@ async def create_or_update_patient_diagnosis(
                 diagnosis_id=diagnosis_id,
                 procedure_id=procedure_item.procedure_id,
                 free_text_procedure=procedure_item.free_text_procedure,
+                price=procedure_item.price,  # ← add this
                 prerequisite_text=procedure_item.prerequisite_text,
                 created_by=current_user.user_id
             )

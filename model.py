@@ -610,6 +610,7 @@ class DiagnosisProcedures(Base):
     diagnosis_id = Column(Integer, ForeignKey("patient_diagnosis.diagnosis_id", ondelete="CASCADE"), nullable=False)
     procedure_id = Column(Integer, ForeignKey("procedure_master.procedure_id"), nullable=True)  # nullable for free text
     free_text_procedure = Column(String(255), nullable=True)  # ← new
+    price = Column(Numeric(10, 2), nullable=True)
     prerequisite_text = Column(Text)
 
     # Audit fields
@@ -947,5 +948,5 @@ class ProcedureBillItem(Base):
         CheckConstraint("price >= 0", name="chk_procedure_item_price_positive"),
         CheckConstraint("final_price >= 0", name="chk_procedure_item_final_positive"),
         CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_procedure_item_discount_range"),
-        CheckConstraint("LENGTH(procedure_text) >= 5", name="chk_procedure_item_text_length"),
+        
     )

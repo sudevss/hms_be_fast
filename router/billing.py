@@ -546,6 +546,7 @@ async def load_diagnosis_for_billing(
                 ))
 
         # ── 5. Build procedure items ──────────────────────────────────────────
+        # ── 5. Build procedure items ──────────────────────────────────────────
         procedure_items: List[DiagnosisProcedureItem] = []
         if diagnosis:
             for proc in diagnosis.procedures:
@@ -554,7 +555,8 @@ async def load_diagnosis_for_billing(
                     else proc.free_text_procedure
                 )
                 price = (
-                    float(proc.procedure.price) if proc.procedure and proc.procedure.price
+                    float(proc.price) if proc.price
+                    else float(proc.procedure.price) if proc.procedure and proc.procedure.price
                     else 0.0
                 )
                 if not procedure_text:
