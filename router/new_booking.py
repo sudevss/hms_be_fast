@@ -199,22 +199,43 @@ def update_slot_booking_status(db, dcid, status="Booked"):
     except Exception as e:
         return False, str(e)
 
-def validate_appointment_constraints(db: Session, patient_id: int, doctor_id: int, 
-                                   facility_id: int, appointment_date: date, appointment_time: time):
+def validate_appointment_constraints(
+    db: Session,
+    doctor_id: int,
+    facility_id: int,
+    appointment_date: date,
+    appointment_time: time,
+    patient_id: Optional[int] = None,
+    exclude_appointment_id: Optional[int] = None,
+):
     try:
-        # Check for overlapping appointments (same patient, same date, same time)
-        overlapping = db.query(model.Appointment).filter(
-            model.Appointment.patient_id == patient_id,
+        base_query = db.query(model.Appointment).filter(
+            model.Appointment.facility_id == facility_id,
             model.Appointment.AppointmentDate == appointment_date,
             model.Appointment.AppointmentTime == appointment_time,
-            model.Appointment.Cancelled == False
+            model.Appointment.Cancelled == False,
+        )
+
+        if exclude_appointment_id is not None:
+            base_query = base_query.filter(
+                model.Appointment.appointment_id != exclude_appointment_id
+            )
+
+        if patient_id is not None:
+            patient_overlap = base_query.filter(
+                model.Appointment.patient_id == patient_id
+            ).first()
+            if patient_overlap:
+                return False, "Patient already has an appointment at this time"
+
+        doctor_overlap = base_query.filter(
+            model.Appointment.doctor_id == doctor_id
         ).first()
-        
-        if overlapping:
-            return False, "Patient already has an appointment at this time"
-        
+        if doctor_overlap:
+            return False, "This time slot is already booked for the selected doctor"
+
         return True, "Validation passed"
-        
+
     except Exception as e:
         return False, f"Error validating appointment constraints: {str(e)}"
 
@@ -557,19 +578,29 @@ def dashboard_book_appointment(
         if not schedule_valid:
             raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
         
+        is_valid, validation_error = validate_appointment_constraints(
+            db,
+            booking_data.doctor_id,
+            facility_id,
+            booking_data.AppointmentDate,
+            booking_data.AppointmentTime,
+        )
+
+        if not is_valid:
+            raise HTTPException(400, f"Appointment validation failed: {validation_error}")
+
         # Use the slot duration from the schedule (default to 15 if not found)
         slot_duration_minutes = slot_duration if slot_duration else 15
-        
+
         slot_dcid, error_message = find_or_create_available_slot(
             db, booking_data.doctor_id, facility_id,
             booking_data.AppointmentDate, booking_data.AppointmentTime,
             slot_duration_minutes
         )
-        
+
         if not slot_dcid:
             raise HTTPException(400, f"Booking validation failed: {error_message}")
-        
-        
+
         phone_number = booking_data.patient_info.contact_number
         
         # Always create new patient - allow multiple patients with same phone number
@@ -612,14 +643,6 @@ def dashboard_book_appointment(
             "disease": new_patient.disease,
             "ABDM_ABHA_id": new_patient.ABDM_ABHA_id
         }
-        
-        is_valid, validation_error = validate_appointment_constraints(
-            db, patient_id, booking_data.doctor_id, facility_id,
-            booking_data.AppointmentDate, booking_data.AppointmentTime
-        )
-        
-        if not is_valid:
-            raise HTTPException(400, f"Appointment validation failed: {validation_error}")
         
         if not db.query(model.Doctors).filter(model.Doctors.id == booking_data.doctor_id).first():
             raise HTTPException(404, "Doctor not found")
@@ -823,18 +846,6 @@ def book_appointment_for_existing_patient(
         if not schedule_valid:
             raise HTTPException(400, f"Doctor schedule validation failed: {schedule_message}")
         
-        # Use the slot duration from the schedule (default to 15 if not found)
-        slot_duration_minutes = slot_duration if slot_duration else 15
-        
-        slot_dcid, error_message = find_or_create_available_slot(
-            db, booking_data.doctor_id, facility_id,
-            booking_data.AppointmentDate, booking_data.AppointmentTime,
-            slot_duration_minutes
-        )
-        
-        if not slot_dcid:
-            raise HTTPException(400, f"Booking validation failed: {error_message}")
-        
         existing_patient = db.query(model.Patients).filter(
             model.Patients.id == booking_data.patient_id,
             model.Patients.facility_id == facility_id
@@ -850,12 +861,28 @@ def book_appointment_for_existing_patient(
                 raise HTTPException(400, "Review checkbox can only be selected if there is an appointment in the last 7 days")
         
         is_valid, validation_error = validate_appointment_constraints(
-            db, booking_data.patient_id, booking_data.doctor_id, facility_id,
-            booking_data.AppointmentDate, booking_data.AppointmentTime
+            db,
+            booking_data.doctor_id,
+            facility_id,
+            booking_data.AppointmentDate,
+            booking_data.AppointmentTime,
+            patient_id=booking_data.patient_id,
         )
         
         if not is_valid:
             raise HTTPException(400, f"Appointment validation failed: {validation_error}")
+
+        # Use the slot duration from the schedule (default to 15 if not found)
+        slot_duration_minutes = slot_duration if slot_duration else 15
+
+        slot_dcid, error_message = find_or_create_available_slot(
+            db, booking_data.doctor_id, facility_id,
+            booking_data.AppointmentDate, booking_data.AppointmentTime,
+            slot_duration_minutes
+        )
+
+        if not slot_dcid:
+            raise HTTPException(400, f"Booking validation failed: {error_message}")
         
         if booking_data.payment_status is not None:
             existing_patient.payment_status = booking_data.payment_status
@@ -999,17 +1026,18 @@ def update_appointment(
             
             slot_duration_minutes = slot_duration if slot_duration else 15
             
-            # ✅ FIX 2: Better overlap validation (exclude current appointment)
-            overlapping = db.query(model.Appointment).filter(
-                model.Appointment.patient_id == appointment.patient_id,
-                model.Appointment.AppointmentDate == new_date,
-                model.Appointment.AppointmentTime == new_time,
-                model.Appointment.Cancelled == False,
-                model.Appointment.appointment_id != appointment_id  # Exclude current appointment
-            ).first()
-            
-            if overlapping:
-                raise HTTPException(400, "Patient already has an appointment at this time")
+            is_valid, validation_error = validate_appointment_constraints(
+                db,
+                appointment.doctor_id,
+                appointment.facility_id,
+                new_date,
+                new_time,
+                patient_id=appointment.patient_id,
+                exclude_appointment_id=appointment_id,
+            )
+
+            if not is_valid:
+                raise HTTPException(400, validation_error)
             
             # Find or create new slot
             slot_dcid, error_message = find_or_create_available_slot(

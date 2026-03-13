@@ -676,6 +676,7 @@ def get_all_appointments(
     date: date = Query(...),
     end_date: Optional[date] = Query(None),
     patient_id: Optional[int] = Query(None),
+    doctor_id: Optional[int] = Query(None),
     appointment_status: Optional[str] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -705,7 +706,10 @@ def get_all_appointments(
     
     if patient_id:
         query = query.filter(Appointment.patient_id == patient_id)
-    
+
+    if doctor_id:
+        query = query.filter(Appointment.doctor_id == doctor_id)
+
     if appointment_status:
         status_lower = appointment_status.lower()
         if status_lower == "scheduled":
@@ -714,6 +718,8 @@ def get_all_appointments(
             query = query.filter(Appointment.AppointmentStatus == "Waiting", Appointment.CheckinTime != None, Appointment.Cancelled == False)
         elif status_lower == "completed":
             query = query.filter(Appointment.AppointmentStatus == "Completed", Appointment.CheckinTime != None, Appointment.Cancelled == False)
+        elif status_lower == "active":
+            query = query.filter(Appointment.Cancelled == False)
         elif status_lower == "cancelled":
             query = query.filter(Appointment.AppointmentStatus == "Cancelled", Appointment.Cancelled == True)
         else:
@@ -1177,6 +1183,8 @@ def get_patient_appointments(
             query = query.filter(Appointment.AppointmentStatus == "Waiting", Appointment.CheckinTime != None, Appointment.Cancelled == False)
         elif status_lower == "completed":
             query = query.filter(Appointment.AppointmentStatus == "Completed", Appointment.CheckinTime != None, Appointment.Cancelled == False)
+        elif status_lower == "active":
+            query = query.filter(Appointment.Cancelled == False)
         elif status_lower == "cancelled":
             query = query.filter(Appointment.AppointmentStatus == "Cancelled", Appointment.Cancelled == True)
         else:
