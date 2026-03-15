@@ -21,7 +21,7 @@ from router import (
     appointment, medical_record, billing,
     medical_document, login, dashboard, new_booking,
     patient_diagnosis,templates, patient_reports,
-    admin,lab_result
+    admin,lab_results
 )
 import model
 
