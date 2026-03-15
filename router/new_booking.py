@@ -300,6 +300,12 @@ class PatientInfo(BaseModel):
             raise ValueError("Last name is required")
         return v.strip()
     
+    @validator('dob', pre=True)
+    def parse_dob(cls, v):
+        if v is None or str(v).strip() == "":
+          return None
+        return v
+    
     @property
     def name(self) -> str:
         return f"{self.firstname} {self.lastname}".strip()
@@ -585,7 +591,7 @@ def dashboard_book_appointment(
             firstname=firstname,
             lastname=lastname,
             age=booking_data.patient_info.age or 0,
-            dob=booking_data.patient_info.dob or date.today(),
+            dob=booking_data.patient_info.dob or None,
             contact_number=phone_number,
             address=booking_data.patient_info.address or "Not provided",
             gender=booking_data.patient_info.gender or "Not specified",

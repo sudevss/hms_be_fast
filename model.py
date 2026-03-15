@@ -51,6 +51,8 @@ class Doctors(Base):
     gender = Column(String(10))
     age = Column(Integer)
     experience = Column(Integer)
+    qualification = Column(String(255))  # ADD THIS LINE
+    reg_no = Column(String(100))  # ADD THIS LINE
     
     # New flags for soft delete and active status
     is_active = Column(Boolean, default=True, nullable=False)
@@ -950,3 +952,49 @@ class ProcedureBillItem(Base):
         CheckConstraint("discount_percent >= 0 AND discount_percent <= 100", name="chk_procedure_item_discount_range"),
         
     )
+
+
+class LabResult(Base):
+    __tablename__ = "lab_results"
+
+    lab_result_id       = Column(Integer, primary_key=True, index=True)
+    facility_id         = Column(Integer, ForeignKey("facility.facility_id"), nullable=False, index=True)
+    token_number        = Column(String(50), nullable=False, index=True)
+    token_date          = Column(Date, nullable=False, index=True)
+    patient_id          = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
+    appointment_id      = Column(Integer, ForeignKey("appointment.appointment_id"), nullable=True)
+
+    sample_collected_at = Column(DateTime, nullable=True)
+    reported_at         = Column(DateTime, nullable=True)
+
+    is_deleted  = Column(Boolean, default=False, nullable=False)
+    created_by  = Column(Integer, nullable=True)
+    updated_by  = Column(Integer, nullable=True)
+    created_at  = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at  = Column(DateTime, nullable=True)
+
+    items = relationship(
+        "LabResultItem",
+        back_populates="lab_result",
+        cascade="all, delete-orphan",
+    )
+ 
+ 
+class LabResultItem(Base):
+    """
+    One row per test result line in the report table:
+      TEST NAME | RESULT | NORMAL VALUES
+    """
+    __tablename__ = "lab_result_items"
+ 
+    result_item_id    = Column(Integer, primary_key=True, index=True)
+    lab_result_id     = Column(Integer, ForeignKey("lab_results.lab_result_id", ondelete="CASCADE"), nullable=False, index=True)
+ 
+    test_name         = Column(String(200), nullable=False)   # e.g. HAEMOGLOBIN
+    result_value      = Column(String(100), nullable=False)   # e.g. 15.4 g/dL
+    normal_range_text = Column(String(100), nullable=True)    # e.g. 12.0 - 16.0 g/dL
+    is_abnormal       = Column(Boolean,     nullable=True)    # True = flagged out of range
+    section           = Column(String(150), nullable=True)    # e.g. HAEMATOLOGY REPORT
+    remarks           = Column(Text,        nullable=True)
+ 
+    lab_result = relationship("LabResult", back_populates="items")

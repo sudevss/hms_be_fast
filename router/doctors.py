@@ -39,6 +39,8 @@ class ui_Doctors(BaseModel):
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
+    qualification: Optional[str] = None  # ADD THIS LINE
+    reg_no: Optional[str] = None  # ADD THIS LINE
     is_active: Optional[bool] = True
 
     class Config:
@@ -71,6 +73,8 @@ class ui_DoctorsUpdate(BaseModel):
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
+    qualification: Optional[str] = None  # ADD THIS LINE
+    reg_no: Optional[str] = None  # ADD THIS LINE
     is_active: Optional[bool] = None
     
     class Config:
@@ -122,6 +126,8 @@ class doctor_response(BaseModel):
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
+    qualification: Optional[str] = None  # ADD THIS LINE
+    reg_no: Optional[str] = None  # ADD THIS LINE
     is_active: bool
     schedules: List[schedule_response] = []
 
@@ -142,6 +148,8 @@ class doctor_schema_with_schedule(BaseModel):
     gender: Optional[str] = None
     age: Optional[int] = None
     experience: Optional[int] = None
+    qualification: Optional[str] = None  # ADD THIS LINE
+    reg_no: Optional[str] = None  # ADD THIS LINE
     is_active: bool
     schedules: List[schedule_response] = []
     facility: Optional[facility_response] = None
@@ -327,6 +335,8 @@ async def get_all_doctors(
                 gender=getattr(doctor, 'gender', None),
                 age=getattr(doctor, 'age', None),
                 experience=getattr(doctor, 'experience', None),
+                qualification=getattr(doctor, 'qualification', None),  # ADD THIS LINE
+                reg_no=getattr(doctor, 'reg_no', None),  # ADD THIS LINE
                 is_active=doctor.is_active,
                 facility_id=doctor.facility_id,
                 schedules=schedules
@@ -398,6 +408,8 @@ async def get_doctor_by_id(
             gender=getattr(doctor, 'gender', None),
             age=getattr(doctor, 'age', None),
             experience=getattr(doctor, 'experience', None),
+            qualification=getattr(doctor, 'qualification', None),  # ADD THIS LINE
+            reg_no=getattr(doctor, 'reg_no', None),  # ADD THIS LINE
             is_active=doctor.is_active,
             schedules=schedules,
             facility=facility_info
@@ -437,6 +449,8 @@ async def add_new_doctor(
         doctor_model.gender = doctor.gender
         doctor_model.age = doctor.age
         doctor_model.experience = doctor.experience
+        doctor_model.qualification = doctor.qualification  # ADD THIS LINE
+        doctor_model.reg_no = doctor.reg_no  # ADD THIS LINE
         doctor_model.is_active = doctor.is_active if doctor.is_active is not None else True
         doctor_model.is_deleted = False  # Always set to False for new doctors
 
@@ -541,6 +555,8 @@ async def edit_doctor_details(
             gender=getattr(existing_doctor, 'gender', None),
             age=getattr(existing_doctor, 'age', None),
             experience=getattr(existing_doctor, 'experience', None),
+            qualification=getattr(existing_doctor, 'qualification', None),  # ADD THIS LINE
+            reg_no=getattr(existing_doctor, 'reg_no', None),  # ADD THIS LINE
             is_active=existing_doctor.is_active,
             facility_id=existing_doctor.facility_id,
             schedules=schedules
