@@ -21,7 +21,7 @@ from router import (
     appointment, medical_record, billing,
     medical_document, login, dashboard, new_booking,
     patient_diagnosis,templates, patient_reports,
-    admin
+    admin,lab_result
 )
 import model
 
@@ -86,6 +86,7 @@ app.include_router(doctors.router)
 app.include_router(patients.router)
 app.include_router(usermaster.router)
 app.include_router(facility.router)
+app.include_router(lab_results.router)
 
 # Medical Operations
 app.include_router(doctor_schedule.router)
